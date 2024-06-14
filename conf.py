@@ -47,7 +47,28 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'alabaster'
+# html_theme = 'alabaster'
+html_theme = 'sphinx_book_theme'
+html_theme_options = {
+    "repository_url": "https://github.com/yaooqinn/yaooqinn.github.io",
+    "use_repository_button": True,
+    "use_edit_page_button": True,
+    "use_download_button": True,
+    "use_fullscreen_button": True,
+    "repository_branch": "main",
+    "path_to_docs": ".",
+    "logo_only": True,
+    "home_page_in_toc": False,
+    "show_navbar_depth": 1,
+    "show_toc_level": 2,
+    "announcement": "&#129412; Greetings From Kent Yao! &#x2728;, v" + release,
+    "toc_title": "",
+    "extra_navbar": "Version " + release,
+}
+
+# html_logo = 'imgs/logo.png'
+# html_favicon = 'imgs/logo_red_short.png'
+html_title = 'Kent Yao'
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
