@@ -2,7 +2,6 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/spark.iml" filepath="$PROJECT_DIR$/spark.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/yaooqinn.github.io.iml" filepath="$PROJECT_DIR$/.idea/yaooqinn.github.io.iml" />
     </modules>
   </component>

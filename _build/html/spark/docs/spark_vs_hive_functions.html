@@ -33,6 +33,7 @@
     <script src="../../_static/scripts/sphinx-book-theme.js?digest=f31d14ad54b65d19161ba51d4ffff3a77ae00456"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
+    <link rel="prev" title="Apache Spark V.S. Apache Hive" href="spark_vs_hive.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="None">
     
@@ -77,27 +78,32 @@
   <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
 </form><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item active">
-        <ul class="nav bd-sidenav">
- <li class="toctree-l1 has-children">
+        <ul class="current nav bd-sidenav">
+ <li class="toctree-l1 current active has-children">
   <a class="reference internal" href="../index.html">
    Apache Spark
   </a>
-  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
   <label for="toctree-checkbox-1">
    <i class="fas fa-chevron-down">
    </i>
   </label>
-  <ul>
-   <li class="toctree-l2 has-children">
+  <ul class="current">
+   <li class="toctree-l2 current active has-children">
     <a class="reference internal" href="spark_vs_hive.html">
      Apache Spark V.S. Apache Hive
     </a>
-    <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+    <input checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
     <label for="toctree-checkbox-2">
      <i class="fas fa-chevron-down">
      </i>
     </label>
-    <ul class="simple">
+    <ul class="current">
+     <li class="toctree-l3 current active">
+      <a class="current reference internal" href="#">
+       Functions
+      </a>
+     </li>
     </ul>
    </li>
   </ul>
@@ -330,10 +336,49 @@ title="Print to PDF"
                 
   <section id="functions">
 <h1>Functions<a class="headerlink" href="#functions" title="Permalink to this headline">#</a></h1>
-<ul class="simple">
-<li><p>greatest</p></li>
-<li><p>least</p></li>
+<table class="colwidths-auto table" id="id1">
+<caption><span class="caption-text">Frozen Delights!</span><a class="headerlink" href="#id1" title="Permalink to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Spark</p></th>
+<th class="head"><p>Hive</p></th>
+<th class="head"><p>Compatible</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Differences</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><cite>DECODE(str, charset)</cite></p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Encode the first argument using the second argument character set</p></td>
+<td><ul class="simple">
+<li><p><cite>str</cite>: The string to be decoded
+- Spark supports any type of values that can be implicitly converted to string, while Hive supports only string type</p></li>
+<li><p><cite>charset</cite>: The character set to use for decoding
+- Spark 3.x and previous versions and Hive support all the character sets that are supported by Java, while the charsets is limited to ‘US-ASCII’, ‘ISO-8859-1’, ‘UTF-8’, ‘UTF-16BE’, ‘UTF-16LE’, ‘UTF-16’ since Spark 4.0</p></li>
+<li><p>Output for malformed input:
+- Spark produces mojibake(nonsense charactor)</p></li>
 </ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>GREATEST</p></td>
+<td><p>✓</p></td>
+<td><p>✓</p></td>
+<td><p>×</p></td>
+<td><p>TBD</p></td>
+<td><p>TBD</p></td>
+</tr>
+<tr class="row-even"><td><p>LEAST</p></td>
+<td><p>✓</p></td>
+<td><p>✓</p></td>
+<td><p>×</p></td>
+<td><p>TBD</p></td>
+<td><p>TBD</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="indices-and-tables">
 <h1>Indices and tables<a class="headerlink" href="#indices-and-tables" title="Permalink to this headline">#</a></h1>
@@ -352,6 +397,13 @@ title="Print to PDF"
                 
     <!-- Previous / next buttons -->
 <div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="spark_vs_hive.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Apache Spark V.S. Apache Hive</p>
+        </div>
+    </a>
 </div>
             </footer>
         </div>
