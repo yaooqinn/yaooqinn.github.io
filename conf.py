@@ -71,7 +71,6 @@ html_title = 'Kent Yao'
 
 html_static_path = ['_static']
 htmlhelp_basename = 'Recommonmarkdoc'
-
 github_doc_root = 'https://github.com/yaooqinn/yaooqinn.github.io/tree/main/docs/'
 
 
