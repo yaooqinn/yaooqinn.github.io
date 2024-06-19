@@ -26,14 +26,14 @@ The differences between Spark and Hive functions could be categorized into the f
        - `charset`: The character set to use for decoding
          - Spark 3.x and previous versions and Hive support all the character sets that are supported by Java, while the charsets is limited to 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16' since Spark 4.0
        - Output for malformed input:
-         - Spark produces mojibake(nonsense charactor), while hive raises an error for case like `ENCODE('abc中', 'US-ASCII')`
-   * - `DECODE` decode(expr, search, result [, search, result ] ... [, default])
+         - Spark produces mojibake(nonsense charactor), while hive raises an error for case like `DECODE(X'E58A9DE5909BE69BB4E5B0BDE4B880E69DAFE98592', 'US-ASCII')`
+   * - `DECODE`(expr, search, result [, search, result ] ... [, default])
      - Y
      - N
      - N
      - Compares expr to each search value in order. If expr is equal to a search value, decode returns the corresponding result. If no match is found, then it returns default. If default is omitted, it returns null.
      - The Spark version is derived from `Oracle DECODE`_, while Hive does not have it.
-   * - `ENCODE`_(str, charset)`
+   * - `ENCODE`_ (str, charset)`
      - Y
      - Y
      - N
@@ -45,18 +45,22 @@ The differences between Spark and Hive functions could be categorized into the f
          - Spark 3.x and previous versions and Hive support all the character sets that are supported by Java, while the charsets is limited to 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16' since Spark 4.0
        - Output for malformed input:
          - Spark produces mojibake(nonsense charactor), while hive raises an error for case like `ENCODE('abc中', 'US-ASCII')`
-   * - GREATEST
-     - ✓
-     - ✓
-     - ×
-     - TBD
-     - TBD
-   * - LEAST
-     - ✓
-     - ✓
-     - ×
-     - TBD
-     - TBD
+   * - `GREATEST`_ (expr, ...)
+     - Y
+     - Y
+     - N
+     - Returns the greatest value of all parameters
+     -
+       - `expr`: The expression to compare
+         - Spark and Hive(< 2.0.0) require all of them having the data type, while strict type restriction relaxed in Hive(> 2.0.0)
+         - Output for NULL:
+           - Spark and Hive(< 2.0.0) skip NULLs, while Hive(> 2.0.0) returns NULL if any of the parameters are NULL
+   * - `LEAST`_ (expr, ...)
+     - Y
+     - Y
+     - N
+     - Returns the least value of all parameters
+     - The differences are as same as GREATEST
 
 
 
@@ -70,3 +74,5 @@ Indices and tables
 .. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
 .. _DECODE: https://spark.apache.org/docs/latest/api/sql/index.html#decode
 .. _Oracle DECODE: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/DECODE.html
+.. _GREATEST: https://spark.apache.org/docs/latest/api/sql/index.html#greatest
+.. _LEAST: https://spark.apache.org/docs/latest/api/sql/index.html#least
