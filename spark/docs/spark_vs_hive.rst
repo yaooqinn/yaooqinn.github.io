@@ -1,5 +1,5 @@
-Apache Spark V.S. Apache Hive
-=============================
+Variance Between Spark and Hive
+===============================
 
 .. toctree::
    :maxdepth: 2
