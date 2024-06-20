@@ -1,7 +1,7 @@
 Data Types
 ==========
 
-The differences between Spark and Hive data types could be categorized into the following types:
+This document provides a comparison of the differences between Spark SQL Data Types and Hive SQL Data Types.
 
 .. list-table:: The differences between Spark and Hive Data Types
    :widths: auto
@@ -14,6 +14,12 @@ The differences between Spark and Hive data types could be categorized into the 
      - Compatible
      - Description
      - Differences
+   * - BOOLEAN
+     - Y
+     - Y
+     - Y
+     - A boolean type.
+     -
    * - TINYINT
      - Y
      - Y
@@ -168,3 +174,36 @@ The differences between Spark and Hive data types could be categorized into the 
      - **N**
      - A collection of types.
      -
+   * - | INTERVAL YEAR TO MONTH
+       | INTERVAL YEAR
+       | INTERVAL MONTH
+     - Y
+     - Y
+     - **N**
+     - Year to month intervals.
+     -
+   * - | INTERVAL DAY
+       | INTERVAL DAY TO HOUR
+       | INTERVAL DAY TO MINUTE
+       | INTERVAL DAY TO SECOND
+       | INTERVAL HOUR
+       | INTERVAL HOUR TO MINUTE
+       | INTERVAL HOUR TO SECOND
+       | INTERVAL MINUTE
+       | INTERVAL MINUTE TO SECOND
+       | INTERVAL SECOND
+     - Y
+     - Y
+     - **N**
+     - Day to second intervals.
+     -
+
+.. note::
+  Hive 3.1 added support for TIMESTAMP WITH LOCAL TIME ZONE, and Spark 3.4 added support for TIMESTAMP_NTZ.
+  The TIMESTAMP type exists both in Hive and Spark with different semantics for a long time.
+  BE CAREFUL when using TIMESTAMP type in Spark and Hive with a shared Hive Metastore.
+  Another pain point for Spark to correct the timestamp mappings is that Spark supports interoperate with
+  different versions of Hive Metastore and not all of them support TIMESTAMP WITH LOCAL TIME ZONE.
+
+.. _HIVE-15692: https://issues.apache.org/jira/browse/HIVE-15692
+
