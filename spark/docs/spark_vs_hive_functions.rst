@@ -69,14 +69,6 @@ The differences between Spark and Hive functions could be categorized into the f
      - The differences are as same as GREATEST
 
 
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
-
 .. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
 .. _DECODE: https://spark.apache.org/docs/latest/api/sql/index.html#decode
 .. _Oracle DECODE: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/DECODE.html
