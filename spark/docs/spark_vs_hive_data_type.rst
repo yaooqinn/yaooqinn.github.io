@@ -3,6 +3,9 @@ Data Types
 
 This document provides a comparison of the differences between Spark SQL Data Types and Hive SQL Data Types.
 
+Supported Data Types
+--------------------
+
 .. list-table:: The differences between Spark and Hive Data Types
    :widths: auto
    :align: center
@@ -204,6 +207,9 @@ This document provides a comparison of the differences between Spark SQL Data Ty
   BE CAREFUL when using TIMESTAMP type in Spark and Hive with a shared Hive Metastore.
   Another pain point for Spark to correct the timestamp mappings is that Spark supports interoperate with
   different versions of Hive Metastore and not all of them support TIMESTAMP WITH LOCAL TIME ZONE.
+
+Type Conversions
+----------------
 
 .. _HIVE-15692: https://issues.apache.org/jira/browse/HIVE-15692
 
