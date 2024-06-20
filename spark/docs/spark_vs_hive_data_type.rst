@@ -3,9 +3,6 @@ Data Types
 
 The differences between Spark and Hive data types could be categorized into the following types:
 
-Comparison
-----------
-
 .. list-table:: The differences between Spark and Hive Data Types
    :widths: auto
    :align: center
