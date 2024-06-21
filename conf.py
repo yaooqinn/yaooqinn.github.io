@@ -68,6 +68,7 @@ html_theme_options = {
 }
 
 html_title = 'Kent Yao'
+html_logo = 'https://avatars.githubusercontent.com/yaooqinn'
 
 # html_static_path = ['_static']
 htmlhelp_basename = 'Recommonmarkdoc'

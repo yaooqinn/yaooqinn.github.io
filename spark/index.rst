@@ -1,4 +1,3 @@
-
 Apache Spark
 ============
 
@@ -6,12 +5,7 @@ Apache Spark
    :maxdepth: 2
 
    docs/spark_vs_hive
+   docs/unconventional_usages
 
 
 
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`

@@ -6,8 +6,6 @@
 Meet Kent Yao
 =============
 
-Kent Yao | Qin Yao | 燕青(NetEase)
-----------------------------------
 
 .. toctree::
    :maxdepth: 2
