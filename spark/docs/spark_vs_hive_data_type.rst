@@ -200,6 +200,12 @@ Supported Data Types
      - **N**
      - Day to second intervals.
      -
+   * - VOID
+     - Y
+     - Y
+     - Y
+     - Null Type
+     -
 
 .. note::
   Hive 3.1 added support for TIMESTAMP WITH LOCAL TIME ZONE, and Spark 3.4 added support for TIMESTAMP_NTZ.
@@ -210,6 +216,13 @@ Supported Data Types
 
 Type Conversions
 ----------------
+
+Implicit Type Conversion
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+Explicit Type Conversion
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _HIVE-15692: https://issues.apache.org/jira/browse/HIVE-15692
 
