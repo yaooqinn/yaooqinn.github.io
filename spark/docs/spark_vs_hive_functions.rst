@@ -3,6 +3,13 @@ Functions
 
 The differences between Spark and Hive functions could be categorized into the following types:
 
+.. note::
+   :class: margin
+
+   - **<->**: Bi-directional compatibility
+   - **->**: A Spark workload can run the same way in Hive, but not vice versa
+   - **<-**: A Hive workload can run the same way in Spark, but not vice versa
+   - **!=**: Non-compatible
 
 .. list-table:: The differences between Spark and Hive functions
    :widths: auto
@@ -15,16 +22,22 @@ The differences between Spark and Hive functions could be categorized into the f
      - Compatible
      - Description
      - Differences
+   * - `ABS`_ (expr)
+     - Y
+     - Y
+     - <-
+     - Returns the absolute value of the numeric value
+     - Spark support interval types as input but Hive doest
    * - `BIN`_ (expr)
      - Y
      - Y
-     - Y
+     - <->
      - Returns the number in binary format
      -
    * - `DECODE`_ (bin, charset)
      - Y
      - Y
-     - **N**
+     - !=
      - Decodes the first argument using the second argument character set
      -
        - `bin`: The byte array to be decoded
@@ -36,13 +49,13 @@ The differences between Spark and Hive functions could be categorized into the f
    * - `DECODE`_ (expr, search, result [, search, result ] ... [, default])
      - Y
      - **N**
-     - **N**
+     - !=
      - Compares expr to each search value in order. If expr is equal to a search value, decode returns the corresponding result. If no match is found, then it returns default. If default is omitted, it returns null.
      - The Spark version is derived from `Oracle DECODE`_, while Hive does not have it.
    * - `ENCODE`_ (str, charset)
      - Y
      - Y
-     - **N**
+     - !=
      - Encode the first argument using the second argument character set
      -
        - `str`: The string to be decoded
@@ -54,7 +67,7 @@ The differences between Spark and Hive functions could be categorized into the f
    * - `GREATEST`_ (expr, ...)
      - Y
      - Y
-     - **N**
+     - !=
      - Returns the greatest value of all parameters
      -
        - `expr`: The expression to compare
@@ -64,16 +77,22 @@ The differences between Spark and Hive functions could be categorized into the f
    * - `HASH`_ (expr, ...)
      - Y
      - Y
-     - **N**
+     - !=
      - Returns a hash value of the arguments
      - As Spark and Hive use different hash algorithms, the results are not the same for the same input.
    * - `LEAST`_ (expr, ...)
      - Y
      - Y
-     - **N**
+     - !=
      - Returns the least value of all parameters
      - The differences are as same as GREATEST
 
+
+
+
+
+
+.. _ABS: https://spark.apache.org/docs/latest/api/sql/index.html#abs
 .. _BIN: https://spark.apache.org/docs/latest/api/sql/index.html#bin
 .. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
 .. _DECODE: https://spark.apache.org/docs/latest/api/sql/index.html#decode

@@ -56,15 +56,14 @@ html_theme_options = {
     "use_edit_page_button": True,
     "use_download_button": True,
     "use_fullscreen_button": True,
+    "use_sidenotes": True,
     "repository_branch": "main",
     "path_to_docs": ".",
-    "logo_only": True,
     "home_page_in_toc": False,
     "show_navbar_depth": 1,
     "show_toc_level": 2,
     "announcement": "&#129412; Greetings From Kent Yao! &#x2728;, v" + release,
     "toc_title": "",
-    "extra_navbar": "Version " + release,
 }
 
 html_title = 'Kent Yao'
