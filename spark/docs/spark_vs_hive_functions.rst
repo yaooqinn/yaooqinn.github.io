@@ -15,6 +15,12 @@ The differences between Spark and Hive functions could be categorized into the f
      - Compatible
      - Description
      - Differences
+   * - `BIN`_ (expr)
+     - Y
+     - Y
+     - Y
+     - Returns the number in binary format
+     -
    * - `DECODE`_ (bin, charset)
      - Y
      - Y
@@ -68,7 +74,7 @@ The differences between Spark and Hive functions could be categorized into the f
      - Returns the least value of all parameters
      - The differences are as same as GREATEST
 
-
+.. _BIN: https://spark.apache.org/docs/latest/api/sql/index.html#bin
 .. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
 .. _DECODE: https://spark.apache.org/docs/latest/api/sql/index.html#decode
 .. _Oracle DECODE: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/DECODE.html
