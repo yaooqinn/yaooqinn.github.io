@@ -52,6 +52,12 @@ The differences between Spark and Hive functions could be categorized into the f
      - !=
      - Compares expr to each search value in order. If expr is equal to a search value, decode returns the corresponding result. If no match is found, then it returns default. If default is omitted, it returns null.
      - The Spark version is derived from `Oracle DECODE`_, while Hive does not have it.
+   * - `E`_ ()
+     - Y
+     - Y
+     - <->
+     - Returns the value of the base of the natural logarithm
+     -
    * - `ENCODE`_ (str, charset)
      - Y
      - Y
@@ -64,6 +70,12 @@ The differences between Spark and Hive functions could be categorized into the f
          - Spark 3.x and previous versions and Hive support all the character sets that are supported by Java, while the charsets is limited to 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16' since Spark 4.0
        - Output for malformed input:
          - Spark produces mojibake(nonsense characters), while Hive raises an error for case like `ENCODE('abc中', 'US-ASCII')`
+   * - `FACTORIAL`_ (expr)
+     - Y
+     - Y
+     - !=
+     - Returns the factorial of `expr`. `expr` is [0..20]. Otherwise, null.
+     - Spark supports not only integral types, such as tinyint, smallint, int, bigint, but also fractional types(weird right?), while Hive supports only integral types
    * - `GREATEST`_ (expr, ...)
      - Y
      - Y
@@ -86,17 +98,22 @@ The differences between Spark and Hive functions could be categorized into the f
      - !=
      - Returns the least value of all parameters
      - The differences are as same as GREATEST
-
-
-
-
+   * - `PI`_ ()
+     - Y
+     - Y
+     - <->
+     - Returns the value of PI
+     -
 
 
 .. _ABS: https://spark.apache.org/docs/latest/api/sql/index.html#abs
 .. _BIN: https://spark.apache.org/docs/latest/api/sql/index.html#bin
-.. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
 .. _DECODE: https://spark.apache.org/docs/latest/api/sql/index.html#decode
+.. _E: https://spark.apache.org/docs/latest/api/sql/index.html#e
+.. _ENCODE: https://spark.apache.org/docs/latest/api/sql/index.html#encode
+.. _FACTORIAL: https://spark.apache.org/docs/latest/api/sql/index.html#factorial
 .. _Oracle DECODE: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/DECODE.html
 .. _GREATEST: https://spark.apache.org/docs/latest/api/sql/index.html#greatest
 .. _HASH: https://spark.apache.org/docs/latest/api/sql/index.html#hash
 .. _LEAST: https://spark.apache.org/docs/latest/api/sql/index.html#least
+.. _PI: https://spark.apache.org/docs/latest/api/sql/index.html#pi
