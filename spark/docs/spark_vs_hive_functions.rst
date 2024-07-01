@@ -3,6 +3,9 @@ Functions
 
 The differences between Spark and Hive functions could be categorized into the following types:
 
+Compatibility Details
+---------------------
+
 .. note::
    :class: margin
 
@@ -27,7 +30,8 @@ The differences between Spark and Hive functions could be categorized into the f
      - Y
      - <-
      - Returns the absolute value of the numeric value
-     - Spark support interval types as input but Hive doest
+     - | See `Handle Arithmetic Overflow`_
+       | See `Allows Interval Input`_
    * - `BIN`_ (expr)
      - Y
      - Y
@@ -98,12 +102,106 @@ The differences between Spark and Hive functions could be categorized into the f
      - !=
      - Returns the least value of all parameters
      - The differences are as same as GREATEST
+   * - `NEGATIVE`_ (expr)
+     - Y
+     - Y
+     - N
+     - Returns the negated value of `expr`.
+     - | See `Handle Arithmetic Overflow`_
+       | See `Allows Interval Input`_
+   * - `POSITIVE`_ (expr)
+     - Y
+     - Y
+     - <-
+     - Returns the value of the argument
+     - See `Allows Interval Input`_
    * - `PI`_ ()
      - Y
      - Y
      - <->
      - Returns the value of PI
      -
+
+Generic Differences
+-------------------
+
+Handle Arithmetic Overflow
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An arithmetic overflow occurs when a calculation exceeds the maximum size that can be stored in the data type being used.
+
+.. note::
+   :class: margin, dropdown, toggle
+
+   When `spark.sql.ansi.enabled` is set to `false`, which is default to `false` before Spark 4.0.0 and `true` since 4.0.0.
+   Spark uses this semantics to handle overflow in most of the arithmetic operations.
+
+.. code-block:: sql
+   :Caption: **Produces overflowed values**
+   :emphasize-lines: 1
+   :class: dropdown, toggle
+
+   > SELECT 127Y + 1Y
+   -128
+
+.. note::
+   :class: margin, dropdown, toggle
+
+   - When `spark.sql.ansi.enabled` is set to `false`, which is default to `false` before Spark 4.0.0 and `true` since 4.0.0.
+     Spark uses this semantics to handle overflow in some of the arithmetic operations.
+   - Spark provides some `try_` prefixed variants of the original functions to handle overflow with NULL output in arithmetic operations, e.g. `try_add` v.s. `add`.
+
+.. code-block:: sql
+   :Caption: **Produces `NULL`**
+   :emphasize-lines: 1
+   :class: dropdown, toggle
+
+   > SELECT try_add(127Y, 1Y)
+   NULL
+
+.. note::
+   :class: margin, dropdown, toggle
+
+   When `spark.sql.ansi.enabled` is set to `true`, which is default to `false` before Spark 4.0.0 and `true` since 4.0.0.
+   Spark uses this semantics to handle overflow in arithmetic operations.
+
+.. code-block:: sql
+   :Caption: **Throws Errors**
+   :emphasize-lines: 1
+   :class: dropdown, toggle
+
+   > SELECT 127Y + 1Y
+   org.apache.spark.SparkArithmeticException: [BINARY_ARITHMETIC_OVERFLOW] 127S + 1S caused overflow. SQLSTATE: 22003
+
+.. note::
+   :class: margin, dropdown, toggle
+
+   Hive uses this semantics to handle overflow in arithmetic operations.
+
+.. code-block:: sql
+   :Caption: **Widens data type**
+   :emphasize-lines: 1
+   :class: dropdown, toggle
+
+   > SELECT 127Y + 1Y
+   -- The result type is promoted from tinyint to smallint
+   128
+
+Handle NULL Input
+~~~~~~~~~~~~~~~~~
+
+Allows Interval Input
+~~~~~~~~~~~~~~~~~~~~~
+
+- Spark allows interval types as input most of the arithmetic operations, e.g. `ABS`, `POSITIVE`, and `NEGATIVE` functions, while Hive does not.
+
+.. code-block:: sql
+   :Caption: **Examples**
+   :emphasize-lines: 1
+   :class: dropdown, toggle
+
+   > SELECT ABS(- INTERVAL 1-1 YEAR TO MONTH)
+   INTERVAL 1-1 YEAR TO MONTH
 
 
 .. _ABS: https://spark.apache.org/docs/latest/api/sql/index.html#abs
@@ -115,5 +213,7 @@ The differences between Spark and Hive functions could be categorized into the f
 .. _Oracle DECODE: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/DECODE.html
 .. _GREATEST: https://spark.apache.org/docs/latest/api/sql/index.html#greatest
 .. _HASH: https://spark.apache.org/docs/latest/api/sql/index.html#hash
+.. _NEGATIVE:  https://spark.apache.org/docs/latest/api/sql/index.html#negative
 .. _LEAST: https://spark.apache.org/docs/latest/api/sql/index.html#least
+.. _POSITIVE: https://spark.apache.org/docs/latest/api/sql/index.html#positive
 .. _PI: https://spark.apache.org/docs/latest/api/sql/index.html#pi
