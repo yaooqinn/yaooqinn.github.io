@@ -14,4 +14,5 @@ This document provides a comparison of the differences between Apache Spark and 
 
    spark_vs_hive_data_type
    spark_vs_hive_functions
+   spark_vs_hive_operators
 
