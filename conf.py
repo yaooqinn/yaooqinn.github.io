@@ -28,6 +28,7 @@ author = 'Kent Yao'
 release = '0.0.1'
 
 extensions = [
+    'hoverxref.extension',
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
     'sphinx.ext.mathjax',

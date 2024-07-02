@@ -7,3 +7,4 @@ sphinx-notfound-page==1.0.0
 sphinx-togglebutton==0.3.2
 sphinxemoji==0.3.1
 sphinx-copybutton==0.5.2
+sphinx-hoverxref==1.4.0
