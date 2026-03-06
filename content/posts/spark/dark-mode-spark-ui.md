@@ -73,7 +73,7 @@ We deliberately chose the simplest, most maintainable approach:
 
 This philosophy mirrors how the best developer tools handle theming:
 
-- **GitHub** introduced dark mode in [December 2020](https://github.blog/changelog/2020-12-08-dark-mode/) with a similar approach — respecting system preferences, persisting choice, and using CSS custom properties rather than a parallel stylesheet.
+- **GitHub** introduced dark mode in [December 2020](https://github.blog/news-insights/product-news/new-from-universe-2020-dark-mode-github-sponsors-for-companies-and-more/) with a similar approach — respecting system preferences, persisting choice, and using CSS custom properties rather than a parallel stylesheet.
 - **VS Code** has had dark mode since day one, treating it as a first-class feature rather than an afterthought.
 - **Grafana**, another tool engineers stare at for hours, defaults to dark mode entirely.
 
@@ -83,7 +83,7 @@ The lesson from all of these: **dark mode isn't optional for developer-facing to
 
 Dark mode is one piece of a broader effort to modernize the Spark Web UI under [SPARK-55760](https://issues.apache.org/jira/browse/SPARK-55760). Other improvements landing alongside it include:
 
-- **[Toast notifications](https://github.com/apache/spark/pull/54639)** replacing browser `alert()` dialogs
+- **[Compact SQL plan visualization](https://github.com/apache/spark/pull/54565)** with a clickable detail side panel for metrics
 - **[Offcanvas panels](https://github.com/apache/spark/pull/54589)** for executor detail views
 - **[Table hover effects](https://github.com/apache/spark/pull/54620)** for better row readability
 - **[Bootstrap 5 utility classes](https://github.com/apache/spark/pull/54615)** replacing legacy CSS
