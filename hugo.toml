@@ -1,8 +1,9 @@
 baseURL = "https://yaooqinn.github.io/"
-languageCode = "en-us"
 title = "Kent Yao"
 theme = "PaperMod"
 paginate = 10
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = false
 
 enableRobotsTXT = true
 buildDrafts = false
@@ -13,12 +14,133 @@ buildExpired = false
   disableXML = true
   minifyOutput = true
 
+[languages]
+  [languages.en]
+    languageName = "English"
+    languageCode = "en-us"
+    weight = 1
+    title = "Kent Yao"
+
+    [languages.en.params]
+      description = "ASF Member · Apache Kyuubi PMC Chair · Apache Spark PMC Member · Open Source Enthusiast"
+
+      [languages.en.params.profileMode]
+        enabled = true
+        title = "Kent Yao"
+        subtitle = """🧑‍🤝‍🧑 ASF Member · 🦊 Apache Kyuubi VP · ✨ Apache Spark PMC Member
+Open source contributor passionate about big data, distributed systems, and building communities."""
+        imageUrl = "https://avatars.githubusercontent.com/yaooqinn"
+        imageWidth = 160
+        imageHeight = 160
+        imageTitle = "Kent Yao"
+
+        [[languages.en.params.profileMode.buttons]]
+          name = "About"
+          url = "/about/"
+
+        [[languages.en.params.profileMode.buttons]]
+          name = "Projects"
+          url = "/projects/"
+
+        [[languages.en.params.profileMode.buttons]]
+          name = "Blog"
+          url = "/posts/"
+
+    [[languages.en.menu.main]]
+      identifier = "about"
+      name = "About"
+      url = "/about/"
+      weight = 10
+
+    [[languages.en.menu.main]]
+      identifier = "projects"
+      name = "Projects"
+      url = "/projects/"
+      weight = 20
+
+    [[languages.en.menu.main]]
+      identifier = "posts"
+      name = "Blog"
+      url = "/posts/"
+      weight = 30
+
+    [[languages.en.menu.main]]
+      identifier = "search"
+      name = "Search"
+      url = "/search/"
+      weight = 40
+
+    [[languages.en.menu.main]]
+      identifier = "tags"
+      name = "Tags"
+      url = "/tags/"
+      weight = 50
+
+  [languages.zh]
+    languageName = "中文"
+    languageCode = "zh-cn"
+    weight = 2
+    title = "Kent Yao"
+
+    [languages.zh.params]
+      description = "ASF 成员 · Apache Kyuubi PMC 主席 · Apache Spark PMC 成员 · 开源爱好者"
+
+      [languages.zh.params.profileMode]
+        enabled = true
+        title = "Kent Yao"
+        subtitle = """🧑‍🤝‍🧑 ASF 成员 · 🦊 Apache Kyuubi 副总裁 · ✨ Apache Spark PMC 成员
+热衷于大数据、分布式系统和开源社区建设的开源贡献者。"""
+        imageUrl = "https://avatars.githubusercontent.com/yaooqinn"
+        imageWidth = 160
+        imageHeight = 160
+        imageTitle = "Kent Yao"
+
+        [[languages.zh.params.profileMode.buttons]]
+          name = "关于"
+          url = "/zh/about/"
+
+        [[languages.zh.params.profileMode.buttons]]
+          name = "项目"
+          url = "/zh/projects/"
+
+        [[languages.zh.params.profileMode.buttons]]
+          name = "博客"
+          url = "/zh/posts/"
+
+    [[languages.zh.menu.main]]
+      identifier = "about"
+      name = "关于"
+      url = "/zh/about/"
+      weight = 10
+
+    [[languages.zh.menu.main]]
+      identifier = "projects"
+      name = "项目"
+      url = "/zh/projects/"
+      weight = 20
+
+    [[languages.zh.menu.main]]
+      identifier = "posts"
+      name = "博客"
+      url = "/zh/posts/"
+      weight = 30
+
+    [[languages.zh.menu.main]]
+      identifier = "search"
+      name = "搜索"
+      url = "/zh/search/"
+      weight = 40
+
+    [[languages.zh.menu.main]]
+      identifier = "tags"
+      name = "标签"
+      url = "/zh/tags/"
+      weight = 50
+
 [params]
   env = "production"
-  title = "Kent Yao"
-  description = "ASF Member · Apache Kyuubi PMC Chair · Apache Spark PMC Member · Open Source Enthusiast"
-  keywords = ["Kent Yao", "Apache Spark", "Apache Kyuubi", "Open Source", "Big Data"]
   author = "Kent Yao"
+  keywords = ["Kent Yao", "Apache Spark", "Apache Kyuubi", "Open Source", "Big Data"]
   defaultTheme = "auto"
   disableThemeToggle = false
   ShowReadingTime = true
@@ -42,28 +164,6 @@ buildExpired = false
     favicon16x16 = "https://avatars.githubusercontent.com/yaooqinn"
     favicon32x32 = "https://avatars.githubusercontent.com/yaooqinn"
     apple_touch_icon = "https://avatars.githubusercontent.com/yaooqinn"
-
-  [params.profileMode]
-    enabled = true
-    title = "Kent Yao"
-    subtitle = """🧑‍🤝‍🧑 ASF Member · 🦊 Apache Kyuubi VP · ✨ Apache Spark PMC Member
-Open source contributor passionate about big data, distributed systems, and building communities."""
-    imageUrl = "https://avatars.githubusercontent.com/yaooqinn"
-    imageWidth = 160
-    imageHeight = 160
-    imageTitle = "Kent Yao"
-
-    [[params.profileMode.buttons]]
-      name = "About"
-      url = "/about/"
-
-    [[params.profileMode.buttons]]
-      name = "Projects"
-      url = "/projects/"
-
-    [[params.profileMode.buttons]]
-      name = "Blog"
-      url = "/posts/"
 
   [[params.socialIcons]]
     name = "github"
@@ -94,36 +194,6 @@ Open source contributor passionate about big data, distributed systems, and buil
   URL = "https://github.com/yaooqinn/yaooqinn.github.io/tree/main/content"
   Text = "Suggest Changes"
   appendFilePath = true
-
-[[menu.main]]
-  identifier = "about"
-  name = "About"
-  url = "/about/"
-  weight = 10
-
-[[menu.main]]
-  identifier = "projects"
-  name = "Projects"
-  url = "/projects/"
-  weight = 20
-
-[[menu.main]]
-  identifier = "posts"
-  name = "Blog"
-  url = "/posts/"
-  weight = 30
-
-[[menu.main]]
-  identifier = "search"
-  name = "Search"
-  url = "/search/"
-  weight = 40
-
-[[menu.main]]
-  identifier = "tags"
-  name = "Tags"
-  url = "/tags/"
-  weight = 50
 
 [outputs]
   home = ["HTML", "RSS", "JSON"]
