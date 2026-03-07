@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>Apache Spark Web UI 迎来暗黑模式</title></head>
+<body>
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif; font-size: 16px; line-height: 1.8; color: #333; max-width: 100%; padding: 10px;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">如果你曾在凌晨 2 点盯着 Spark Web UI 调试一个失败的作业，你一定体会过那种感觉：一片刺眼的白光打在眼睛上，而你还在翻阅 Stages、Executors 和 SQL 执行计划。这个时代结束了。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">Apache Spark 的 Web UI 现已支持暗黑模式</strong>，作为 SPARK-55766[1] 的一部分合入 master 分支。一键切换，记住你的偏好，尊重你的系统设置。覆盖所有页面——Jobs、Stages、SQL、Executors、Environment 等。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">为什么需要暗黑模式？</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">暗黑模式不是一种视觉潮流——它是开发者生产力工具。以下是它对 Spark 用户的意义：</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">1. 减轻长时间调试的眼疲劳</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">Spark 作业可能运行数小时。当出现问题时，工程师需要花费大量时间在 Web UI 上——查看 DAG 可视化、阅读 Executor 日志、追踪 SQL 查询计划。暗色界面降低了屏幕与昏暗房间之间的对比度，而深夜调试正是最常见的场景。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">2. 尊重开发者偏好</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">现代开发工具已经普遍采用暗黑模式——VS Code[2]、GitHub[3]、IntelliJ IDEA[4]、终端模拟器，甚至操作系统本身。当开发者的整个环境都处于暗黑模式，然后在浏览器中打开 Spark UI 时，刺眼的白色页面令人不适。Spark UI 应该成为开发者工作流程的自然组成部分，而不是一个例外。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">3. 社区一直在呼唤</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">暗黑模式一直是 Spark 社区最受期待的 UI 特性之一。随着 Web UI 向 Bootstrap 5 现代化（SPARK-55760[5]）迈进，基础设施终于可以正确地支持它——无需 hack、无需自定义 CSS 主题、无需额外的维护负担。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">效果展示</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">以下是 Spark Web UI 在两种模式下的对比：</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">Jobs 页面</h3>
+
+<!-- 请在公众号编辑器中手动上传以下图片 -->
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-jobs.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="亮色 Jobs">
+</p>
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-jobs.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="暗色 Jobs">
+</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">SQL 查询计划可视化</h3>
+
+<!-- 请在公众号编辑器中手动上传以下图片 -->
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-sql.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="亮色 SQL">
+</p>
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-sql.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="暗色 SQL">
+</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">Executors 页面</h3>
+
+<!-- 请在公众号编辑器中手动上传以下图片 -->
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-executors.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="亮色 Executors">
+</p>
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-executors.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="暗色 Executors">
+</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0; padding-left: 15px;">Environment 页面</h3>
+
+<!-- 请在公众号编辑器中手动上传以下图片 -->
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-env.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="亮色 Env">
+</p>
+<p style="margin: 12px 0; text-align: center;">
+<img src="https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-env.png" style="max-width: 100%; border-radius: 8px; margin: 5px 0;" alt="暗色 Env">
+</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">实现理念</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">我们有意选择了最简洁、最易维护的方案：</p>
+
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">基于 Bootstrap 5 颜色模式。</strong> 没有自定义 CSS 颜色系统，没有独立的样式表。Bootstrap 的 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">data-bs-theme</code> 属性自动处理 95% 的工作——按钮、卡片、表格、导航栏和文本都会自动适配。</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">尊重系统偏好。</strong> 首次访问时，UI 会检查 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">prefers-color-scheme</code>——如果你的操作系统处于暗黑模式，Spark 会自动跟随。无需配置。</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">记住你的选择。</strong> 点击一次切换按钮，<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">localStorage</code> 会在所有页面和会话中保存你的偏好。</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">无内容闪烁（FOUC）。</strong> 一段内联脚本在页面渲染前运行，因此在暗黑模式下加载时不会出现白色闪烁。</li>
+</ul>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">这种理念与最优秀的开发工具处理主题的方式一致：</p>
+
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">GitHub</strong> 在 2020 年 12 月[3] 以类似的方式引入暗黑模式——尊重系统偏好、持久化用户选择、使用 CSS 自定义属性而非并行样式表。</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">VS Code</strong> 从第一天起就支持暗黑模式，将其视为核心功能而非事后补充。</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">Grafana</strong>——另一个工程师需要长时间注视的工具，甚至默认就是暗黑模式。</li>
+</ul>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">这些工具的经验告诉我们：<strong style="color: #07c160; font-weight: bold;">暗黑模式对于面向开发者的工具不是可选的，而是必需的。</strong></p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">更大规模现代化的一部分</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">暗黑模式是 SPARK-55760[5] 下 Spark Web UI 现代化工作的一部分。同期落地的其他改进包括：</p>
+
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">紧凑 SQL 执行计划可视化</strong>[6] ——可点击的详情侧边面板</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">Offcanvas 面板</strong>[7] ——用于 Executor 详情视图</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">表格悬停效果</strong>[8] ——提升行可读性</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">Bootstrap 5 工具类</strong>[9] ——替换旧版 CSS</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">全局页脚</strong>[10] ——在所有页面显示版本、运行时间和用户</li>
+</ul>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">目标很简单：Spark Web UI 应该与它所代表的引擎一样现代。Spark 用前沿的分布式计算处理 PB 级数据——它的 UI 也应该体现这种品质。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">来试试吧</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">暗黑模式将在下一个 Apache Spark 版本中发布。如果你从源码构建，它已经在 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">master</code> 分支上了。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">点击导航栏中的 <strong style="color: #07c160; font-weight: bold;">◑</strong> 按钮即可切换。就是这么简单。</p>
+
+<hr style="border: none; height: 1px; background: linear-gradient(to right, transparent, #07c160, transparent); margin: 25px 0;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-style: italic; color: #999;">本功能作为 SPARK-55766[1] 的一部分贡献。欢迎在 SPARK-55760[5] 上提供反馈和贡献。</p>
+
+<section style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #999;">
+<p style="font-weight: bold; color: #666;">参考链接</p>
+<p>[1] https://issues.apache.org/jira/browse/SPARK-55766</p>
+<p>[2] https://code.visualstudio.com/docs/getstarted/themes</p>
+<p>[3] https://github.blog/news-insights/product-news/new-from-universe-2020-dark-mode-github-sponsors-for-companies-and-more/</p>
+<p>[4] https://www.jetbrains.com/help/idea/user-interface-themes.html</p>
+<p>[5] https://issues.apache.org/jira/browse/SPARK-55760</p>
+<p>[6] https://github.com/apache/spark/pull/54565</p>
+<p>[7] https://github.com/apache/spark/pull/54589</p>
+<p>[8] https://github.com/apache/spark/pull/54620</p>
+<p>[9] https://github.com/apache/spark/pull/54615</p>
+<p>[10] https://github.com/apache/spark/pull/54657</p>
+</section>
+
+</div>
+</body>
+</html>

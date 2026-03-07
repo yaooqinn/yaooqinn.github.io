@@ -6,7 +6,7 @@ categories: ["Apache Spark"]
 summary: "Apache Spark's Web UI now supports dark mode — a long-awaited quality-of-life improvement for developers who spend hours debugging jobs. Here's why we built it and what it means for the Spark community."
 showToc: true
 cover:
-  image: "https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-jobs.png"
+  image: "/images/spark-ui/dm-dark-jobs.png"
   alt: "Spark Web UI in Dark Mode"
   caption: "The Spark Jobs page in dark mode"
 ---
@@ -39,25 +39,25 @@ Here's the Spark Web UI in both modes, side by side:
 
 | Light | Dark |
 |:-----:|:----:|
-| ![Light Jobs](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-jobs.png) | ![Dark Jobs](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-jobs.png) |
+| ![Light Jobs](/images/spark-ui/dm-light-jobs.png) | ![Dark Jobs](/images/spark-ui/dm-dark-jobs.png) |
 
 ### SQL Query Plan Visualization
 
 | Light | Dark |
 |:-----:|:----:|
-| ![Light SQL](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-sql.png) | ![Dark SQL](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-sql.png) |
+| ![Light SQL](/images/spark-ui/dm-light-sql.png) | ![Dark SQL](/images/spark-ui/dm-dark-sql.png) |
 
 ### Executors Page
 
 | Light | Dark |
 |:-----:|:----:|
-| ![Light Executors](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-executors.png) | ![Dark Executors](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-executors.png) |
+| ![Light Executors](/images/spark-ui/dm-light-executors.png) | ![Dark Executors](/images/spark-ui/dm-dark-executors.png) |
 
 ### Environment Page
 
 | Light | Dark |
 |:-----:|:----:|
-| ![Light Env](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-light-env.png) | ![Dark Env](https://raw.githubusercontent.com/yaooqinn/spark/0383b3f34aa/docs/dm-dark-env.png) |
+| ![Light Env](/images/spark-ui/dm-light-env.png) | ![Dark Env](/images/spark-ui/dm-dark-env.png) |
 
 ## How It Works — The Philosophy
 
