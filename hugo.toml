@@ -76,6 +76,12 @@ Open source contributor passionate about big data, distributed systems, and buil
       url = "/tags/"
       weight = 50
 
+    [[languages.en.menu.main]]
+      identifier = "tools"
+      name = "Tools"
+      url = "/tools/md2wechat/"
+      weight = 60
+
   [languages.zh]
     languageName = "中文"
     languageCode = "zh-cn"
@@ -136,6 +142,12 @@ Open source contributor passionate about big data, distributed systems, and buil
       name = "标签"
       url = "/zh/tags/"
       weight = 50
+
+    [[languages.zh.menu.main]]
+      identifier = "tools"
+      name = "工具"
+      url = "/tools/md2wechat/"
+      weight = 60
 
 [params]
   env = "production"
