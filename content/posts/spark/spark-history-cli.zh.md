@@ -1,5 +1,5 @@
 ---
-title: "spark-history-cli：在终端里查询 Spark History Server"
+title: "spark-history-cli：让 Spark History Server 对 AI Agent 友好"
 date: 2026-03-18
 tags: ["spark", "cli", "history-server", "python", "copilot", "tooling"]
 categories: ["Apache Spark"]

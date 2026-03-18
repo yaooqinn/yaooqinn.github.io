@@ -1,5 +1,5 @@
 ---
-title: "Introducing spark-history-cli: A Terminal-Native Way to Query the Spark History Server"
+title: "spark-history-cli: Making the Spark History Server Agent-Friendly"
 date: 2026-03-18
 tags: ["spark", "cli", "history-server", "python", "copilot", "tooling"]
 categories: ["Apache Spark"]
