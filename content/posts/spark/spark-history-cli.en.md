@@ -104,9 +104,27 @@ The web UI is great when you're sitting at a browser. But there are real scenari
 
 **CI/CD integration.** After submitting a Spark application in a pipeline, query the History Server to verify the job completed successfully, check stage metrics, or archive event logs as build artifacts.
 
+## Why CLI, Not Just the Web UI? The Agentic Perspective
+
+The most important reason for spark-history-cli isn't human convenience — it's that **AI agents can't use web UIs**.
+
+We're entering an era where LLM-powered agents — GitHub Copilot, coding assistants, on-call bots, automated root-cause analyzers — are becoming first-class participants in engineering workflows. These agents interact with the world through **text interfaces**: shell commands, APIs, and structured output. A web UI is a dead end for them. No matter how polished the Spark History Server's web pages are, an agent can't click links, scroll tables, or read DAG visualizations.
+
+A CLI changes everything:
+
+**Agents can invoke it as a tool.** When an agent needs to answer "why did last night's ETL fail?", it can run `spark-history-cli --json apps --status failed`, parse the JSON, pick the relevant app, run `spark-history-cli --json --app-id <id> jobs` to find the failed job, then `stages` to pinpoint the failing stage — all autonomously, in a chain-of-thought loop. The web UI offers no equivalent entry point for programmatic reasoning.
+
+**Structured output enables reasoning.** The `--json` flag isn't just for `jq` — it's what makes the tool legible to an LLM. An agent can ingest a JSON array of jobs, compare durations, spot anomalies, and synthesize a human-readable diagnosis. Try doing that with an HTML table rendered in a browser.
+
+**The REPL maps to how agents think.** An agent exploring a Spark application follows the same drill-down pattern a human does: list apps → pick one → check jobs → drill into the slow stage → look at task metrics. The REPL's `use` command and hierarchical navigation mirror this reasoning pattern naturally. Each command is a discrete, composable step an agent can plan and execute.
+
+**It completes the feedback loop.** Consider a CI pipeline that submits a Spark application. Today, verifying the result means either parsing raw REST API responses with custom scripts or having a human check the web UI. With spark-history-cli, an agent (or a simple shell script) can query the History Server, verify success, extract metrics, and report — closing the automation loop entirely.
+
+This is the real argument: **the Spark History Server stores rich diagnostic data, but it's locked behind a human-only interface.** spark-history-cli turns that data into something both humans *and* agents can consume. In a world where your on-call assistant is an LLM, that distinction matters.
+
 ## GitHub Copilot CLI Skill
 
-spark-history-cli also ships as a **GitHub Copilot CLI skill**. Install it with:
+spark-history-cli ships as a **GitHub Copilot CLI skill** — the agentic integration in practice. Install it with:
 
 ```bash
 spark-history-cli install-skill
@@ -118,7 +136,7 @@ This copies the bundled skill definition to `~/.copilot/skills/spark-history-cli
 Use /spark-history-cli to inspect the latest completed SHS application.
 ```
 
-Copilot CLI will invoke the tool, interpret the output, and answer your questions about Spark application history in conversational English — no need to remember command syntax.
+Copilot CLI will invoke the tool, interpret the output, and answer your questions about Spark application history in conversational English. You describe the intent; the agent figures out which commands to run, chains them together, and synthesizes the answer. No command syntax to remember, no manual JSON parsing — just a question and an answer grounded in real History Server data.
 
 ## Configuration
 
