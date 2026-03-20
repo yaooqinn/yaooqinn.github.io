@@ -1,0 +1,158 @@
+<section style="max-width: 100%; margin: 0 auto; padding: 10px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #333;">
+
+<h1 style="font-size: 24px; font-weight: bold; color: #1a1a1a; border-bottom: 3px solid #07c160; padding-bottom: 10px; margin: 30px 0 20px 0;">spark-history-cli：让 Spark History Server 对 AI Agent 友好</h1>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">Spark History Server 有不错的 Web UI 和完善的 REST API。但如果你已经在终端里——SSH 到网关节点、在 CI 里调试管道、或者编写事后分析脚本——切到浏览器总感觉是一次不必要的上下文切换。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">spark-history-cli</strong><sup>[1]</sup> 把整个 Spark History Server 放到你指尖。它是一个 Python CLI 工具，将全部 20 个 REST API 端点封装为交互式 REPL 和一次性命令。列出应用、深入作业和 Stage、检查 SQL 执行、查看 Executor 状态、下载事件日志——全在终端里完成。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">安装</h2>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">pip install spark-history-cli</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">就这样。需要 Python 3.10+ 和一个运行中的 Spark History Server。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">两种使用方式</h2>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">交互式 REPL</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">直接运行 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">spark-history-cli</code> 进入 REPL：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">$ spark-history-cli --server http://my-shs:18080
+
+spark-history&gt; apps --status completed --limit 5
+ID                           Name           Status     Start Time           Duration
+app-20260318091500-0003      ETL Pipeline   COMPLETED  2026-03-18 09:15:00  4m 32s
+app-20260318080000-0002      Daily Report   COMPLETED  2026-03-18 08:00:00  12m 15s
+...
+
+spark-history&gt; use app-20260318091500-0003
+Current app: app-20260318091500-0003 (ETL Pipeline)
+
+spark-history&gt; jobs
+Job ID  Status     Stages  Duration  Description
+0       SUCCEEDED  3/3     1m 02s    save at ETLPipeline.scala:45
+1       SUCCEEDED  2/2     2m 18s    save at ETLPipeline.scala:78
+2       SUCCEEDED  1/1     1m 12s    save at ETLPipeline.scala:112
+
+spark-history&gt; stages
+spark-history&gt; sql
+spark-history&gt; executors
+spark-history&gt; env</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">use</code> 命令设置"当前应用"上下文，这样你不用在每个命令里重复 app ID。就像 SQL 里的 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">USE database</code> 一样。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">一次性命令</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">适用于脚本、CI 管道或快速查询：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;"># 列出已完成的应用
+spark-history-cli apps --status completed --limit 10
+
+# 查看指定应用的作业
+spark-history-cli --app-id app-20260318091500-0003 jobs
+
+# 下载事件日志用于离线分析
+spark-history-cli --app-id app-20260318091500-0003 logs ./events.zip
+
+# JSON 输出，方便管道处理
+spark-history-cli --json --app-id app-20260318091500-0003 stages</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">--json</code> 标志输出原始 JSON——可以直接管道到 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">jq</code>，喂给监控脚本，或与其他工具集成。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">功能概览</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">CLI 覆盖 Spark History Server REST API 的 <strong style="color: #07c160; font-weight: bold;">全部 20 个端点</strong>：</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">命令</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">功能</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">apps</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出所有应用，含状态、时间、耗时</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">app &lt;id&gt;</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看应用详情并设为当前应用</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">jobs</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出作业，含状态、Stage 数和耗时</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">job &lt;id&gt;</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看作业详情</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">stages</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出所有 Stage</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">stage &lt;id&gt;</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看 Stage 详情和任务汇总</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">executors</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出活跃 Executor</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">executors --all</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">包含已失效的 Executor</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">sql</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出 SQL 执行记录</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">sql &lt;id&gt;</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看 SQL 执行详情和计划图</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">rdds</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">列出缓存的 RDD</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">env</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看 Spark 配置和环境变量</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">logs [path]</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">下载事件日志（ZIP 格式）</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">version</code></td><td style="padding: 8px; border: 1px solid #e8e8e8;">查看 History Server 的 Spark 版本</td></tr>
+</table>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">为什么不直接用 Web UI？</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">Web UI 在有浏览器的时候很好用。但有些场景下 CLI 更合适：</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">SSH 调试。</strong>你在跳板机或网关节点上排查生产集群问题，没有浏览器，不想做端口转发——只有终端。<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">spark-history-cli --server http://shs:18080 apps</code> 立即开始工作。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">脚本和自动化。</strong>想检查昨天的 ETL 作业是否全部成功？写一个 cron 任务运行 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">spark-history-cli --json apps --status failed</code>，输出非空就告警。<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">--json</code> 标志让这一切变得简单。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">事后分析工作流。</strong>用 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">logs</code> 下载事件日志，用 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">jobs</code> 对比作业耗时，用 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">executors --all</code> 检查 Executor 内存——全在一个终端会话里完成，不用在多个浏览器标签页间来回切换。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">CI/CD 集成。</strong>在管道中提交 Spark 应用后，查询 History Server 验证作业是否成功完成、检查 Stage 指标、或将事件日志归档为构建产物。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">为什么是 CLI，而不只是 Web UI？Agent 视角</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">spark-history-cli 最重要的意义不是人类使用的便利性——而是 <strong style="color: #07c160; font-weight: bold;">AI Agent 根本无法使用 Web UI</strong>。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">我们正进入一个 LLM 驱动的 Agent——GitHub Copilot、编程助手、值班机器人、自动根因分析器——成为工程工作流一等公民的时代。这些 Agent 通过<strong style="color: #07c160; font-weight: bold;">文本接口</strong>与世界交互：Shell 命令、API 和结构化输出。Web UI 对它们来说是死路一条。无论 Spark History Server 的网页多么精美，Agent 无法点击链接、滚动表格或阅读 DAG 可视化图。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">CLI 改变了一切：</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">Agent 可以将它作为工具调用。</strong>当 Agent 需要回答"昨晚的 ETL 为什么失败了？"时，它可以运行 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">spark-history-cli --json apps --status failed</code>，解析 JSON，选出相关应用，再运行 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">spark-history-cli --json --app-id &lt;id&gt; jobs</code> 找到失败的作业，然后用 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">stages</code> 定位失败的 Stage——全部自主完成，在思维链循环中。Web UI 没有提供任何等效的程序化推理入口。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">结构化输出支撑推理。</strong><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">--json</code> 标志不只是给 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">jq</code> 用的——它让工具对 LLM 可读。Agent 可以读入一个 JSON 作业数组，比较耗时，发现异常，然后综合出一份人类可读的诊断报告。试试用浏览器里渲染的 HTML 表格做同样的事。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">REPL 映射了 Agent 的思考方式。</strong>Agent 探索 Spark 应用时遵循与人类相同的下钻模式：列出应用 → 选一个 → 查看作业 → 深入慢的 Stage → 查看任务指标。REPL 的 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">use</code> 命令和层级导航自然地映射了这种推理模式。每个命令都是一个离散的、可组合的步骤，Agent 可以规划和执行。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;"><strong style="color: #07c160; font-weight: bold;">它闭合了反馈循环。</strong>考虑一个提交 Spark 应用的 CI 管道。今天，验证结果意味着要么用自定义脚本解析原始 REST API 响应，要么让人去查 Web UI。有了 spark-history-cli，Agent（或简单的 Shell 脚本）可以查询 History Server，验证成功，提取指标并报告——完全闭合自动化循环。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">这才是真正的论点：<strong style="color: #07c160; font-weight: bold;">Spark History Server 存储了丰富的诊断数据，但它被锁在一个仅供人类使用的界面后面。</strong>spark-history-cli 将这些数据转化为人类<em style="font-style: italic; color: #576b95;">和</em> Agent 都能消费的形式。在你的值班助手是 LLM 的世界里，这个区别至关重要。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">GitHub Copilot CLI 技能</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">spark-history-cli 作为 <strong style="color: #07c160; font-weight: bold;">GitHub Copilot CLI 技能</strong>发布——这是 Agent 集成的实践。安装方式：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">spark-history-cli install-skill</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">这会将内置的技能定义复制到 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">~/.copilot/skills/spark-history-cli</code>。重新加载技能（<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">/skills reload</code>）后，你可以用自然语言提示：</p>
+
+<blockquote style="border-left: 4px solid #07c160; background: #e8f7ef; padding: 12px 15px; margin: 15px 0; border-radius: 0 8px 8px 0; color: #666;">Use /spark-history-cli to inspect the latest completed SHS application.</blockquote>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">Copilot CLI 会调用工具、解读输出，并用对话的方式回答你关于 Spark 应用历史的问题。你描述意图，Agent 决定运行哪些命令，将它们串联起来，并综合出基于真实 History Server 数据的答案。无需记住命令语法，无需手动解析 JSON——只需一个问题和一个答案。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">配置</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">服务器 URL 默认为 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">http://localhost:18080</code>。覆盖方式：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;"># 命令行参数
+spark-history-cli --server http://my-shs:18080
+
+# 环境变量
+export SPARK_HISTORY_SERVER=http://my-shs:18080
+spark-history-cli
+
+# REPL 中动态切换
+spark-history&gt; server http://another-shs:18080</code></pre>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">开始使用</h2>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">pip install spark-history-cli
+spark-history-cli</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 16px; color: #333;">源码在 GitHub：yaooqinn/spark-history-cli<sup>[1]</sup>，基于 Apache 2.0 许可证。欢迎提 Issue、PR 和反馈。</p>
+
+<hr style="border: none; height: 1px; background: linear-gradient(to right, transparent, #07c160, transparent); margin: 25px 0;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-size: 14px; color: #999;">spark-history-cli<sup>[2]</sup> v1.0.1 已发布在 PyPI。</p>
+
+<section style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #999;">
+  <p style="font-weight: bold; color: #666;">参考链接</p>
+  <p>[1] https://github.com/yaooqinn/spark-history-cli</p>
+  <p>[2] https://pypi.org/project/spark-history-cli/</p>
+</section>
+
+</section>
