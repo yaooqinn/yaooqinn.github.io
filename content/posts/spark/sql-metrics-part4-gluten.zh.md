@@ -14,13 +14,9 @@ showToc: true
 - [第三部分：扩展 API、UI 渲染和 REST API](/zh/posts/spark/sql-metrics-part3-extension-api/)
 - **第四部分（本文）**：Gluten 如何扩展指标系统
 
-## Gluten 为指标系统解决了什么问题
+## Gluten 原生引擎如何产生指标
 
-在[第一部分](/zh/posts/spark/understanding-sql-metrics/)中，我们提到原生 Spark 仅有 **7 个算子**拥有计时指标：`HashAggregateExec`、`SortExec`、`SortMergeJoinExec`、`ShuffledHashJoinExec`、`BroadcastExchangeExec`、`ShuffleExchangeExec` 和 `DataSourceScanExec`。大多数位于 `WholeStageCodegen` 集群内的算子无法拥有独立的计时指标，因为它们被融合成了单一的 JVM 方法——一旦 JVM 将它们编译到一起，就不再有可以测量的边界。
-
-Apache Gluten 采取了一种根本不同的方式：它用原生 C++ 引擎——[Velox](https://github.com/facebookincubator/velox) 或 [ClickHouse](https://github.com/ClickHouse/ClickHouse)——完全替换了 JVM 执行引擎。由于原生算子独立执行（没有被 JVM 代码生成融合），**每个算子都可以拥有独立的计时指标**。这不是像 DataFlint 那样的变通方案——DataFlint 通过包装现有 Spark 算子来添加额外的测量代码。这是替换引擎后的自然结果——每个 C++ 算子都是一个独立的函数调用，拥有自己的开始和结束时间戳。
-
-最终结果：Gluten 暴露了 **60+ 个**原生 Spark 所没有的指标，包括每算子的墙钟时间、分阶段的 Join 指标、原生溢出追踪、动态过滤器统计和按存储层级分解的 I/O 指标。
+Apache Gluten 用原生 C++ 引擎——[Velox](https://github.com/facebookincubator/velox) 或 [ClickHouse](https://github.com/ClickHouse/ClickHouse)——替换了 JVM 执行引擎。由于原生算子独立执行（没有被 JVM 代码生成融合），每个 C++ 算子都是一个独立的函数调用，拥有自己的计时基础设施。作为自然结果，Gluten 暴露了 **60+ 个**指标，包括每算子的墙钟时间、分阶段的 Join 指标、原生溢出追踪、动态过滤器统计和按存储层级分解的 I/O 指标。
 
 ## 三层架构
 
@@ -115,7 +111,44 @@ peakMemoryBytes[] — 每个算子的峰值内存
 | `outputBytes` | size | 列式格式的输出数据量 |
 | `loadLazyVectorTime` | timing | 加载惰性求值向量的时间 |
 
-在每个算子上都有 `wallNanos` 是变革性的。在原生 Spark 中，如果查询很慢且瓶颈在 `WholeStageCodegen` 集群内部，你无法判断哪个算子是罪魁祸首。有了 Gluten，你可以立即看到 `FilterExecTransformer` 花了 200 毫秒，而相邻的 `ProjectExecTransformer` 只用了 5 毫秒。
+在每个算子上都有 `wallNanos` 使得识别原生执行中的瓶颈算子变得直观。
+
+### 深入理解 wallNanos 和 cpuCount
+
+这两个指标值得特别关注，因为它们对性能分析最为重要。
+
+两者都来自 Velox 的 `CpuWallTiming` 结构体，通过 RAII 计时器（`DeltaCpuWallTimer`）包装每个算子的 `getOutput()` 调用来收集：
+
+```cpp
+struct CpuWallTiming {
+  uint64_t count;      // getOutput() 调用次数（批次数）
+  uint64_t wallNanos;  // 总墙钟时间（steady_clock，纳秒）
+  uint64_t cpuNanos;   // 总 CPU 时间（CLOCK_THREAD_CPUTIME_ID，纳秒）
+};
+```
+
+**wallNanos** — 使用 `std::chrono::steady_clock` 测量。捕获总实际经过时间，**包括**算子等待子算子产生数据、I/O 等待或线程调度延迟的时间。
+
+**cpuCount** — 尽管名字叫 cpuCount，但它实际上是**调用次数**（`getOutput()` 被调用的次数 = 处理的批次数），而不是 CPU 时间。Gluten JNI 桥接将 `CpuWallTiming.count` 映射到 `cpuCount` 指标。
+
+**如何解读：**
+
+| 场景 | wallNanos | cpuCount | 含义 |
+|------|:---------:|:--------:|------|
+| 大数据量，均匀工作 | 高 | 高 | 处理了很多批次，符合预期 |
+| 少量批次，每个很慢 | 高 | 低 | 可能存在数据倾斜或复杂的每批处理逻辑 |
+| 叶子算子（扫描） | 高 | — | 主要是 I/O 时间（另查 `ioWaitTime`） |
+| 中间算子（过滤） | 高 | — | 包含等待子算子的时间——与子算子的 wallNanos 对比 |
+
+**重要提醒——wallNanos 包含子算子等待时间：**
+
+由于 `wallNanos` 包装了整个 `getOutput()` 调用，父算子的 wallNanos 包含了等待子算子产生数据的阻塞时间。因此：
+
+- **叶子算子**（扫描）：wallNanos ≈ I/O + 计算时间
+- **中间算子**（过滤）：wallNanos = 自身计算 + 子算子扫描时间
+- **不能简单地对所有算子的 wallNanos 求和**——那会重复计算
+
+要隔离算子自身的贡献，将其 wallNanos 与子算子的 wallNanos 做差。Velox 还单独追踪 I/O 相关指标（`ioWaitTime`、`dataSourceReadTime`）以帮助分离纯 I/O 与计算。
 
 ### 扫描专用指标
 
@@ -209,21 +242,6 @@ peakMemoryBytes[] — 每个算子的峰值内存
 
 ## Gluten vs 原生 Spark vs DataFlint
 
-为了更好地理解 Gluten 指标的定位，以下是与原生 Spark 和 [DataFlint](https://www.dataflinttool.com/)（一个通过包装 Spark 算子来添加计时的第三方监控插件）的对比：
-
-| 方面 | 原生 Spark | DataFlint | Gluten |
-|-----|-----------|-----------|--------|
-| 每算子计时 | 仅 7 个算子 | 额外增加约 10 个（Python UDF、Window） | **每个算子** |
-| 实现方式 | 内置 SQLMetric | SparkSessionExtensions 包装 | 原生 C++ 引擎替换 |
-| 溢出详情 | 仅阶段级别 | 与 Spark 相同 | 每算子、每阶段（构建/探测） |
-| 动态过滤器 | 不追踪 | 不追踪 | 生成/接受/消除的行数 |
-| 扫描 I/O 详情 | 仅 `scanTime` | 与 Spark 相同 | `ioWaitTime`，存储/本地/内存分解 |
-| 每算子内存 | 仅 HashAggregate + Sort | 与 Spark 相同 | 每个算子 |
-| 列式指标 | 基础（ColumnarToRow） | 与 Spark 相同 | 每算子的 `outputVectors`、`outputBytes` |
-| Join 阶段分解 | 无 | 无 | 独立的构建/探测指标（各 20+） |
-
-DataFlint 和 Gluten 不是竞争方案——它们解决的是不同的问题。DataFlint 为现有的基于 JVM 的 Spark 部署增加可观测性。Gluten 完全替换了执行引擎，全面的指标是这一架构选择的副产品。如果你已经在使用 Gluten 进行原生加速，这些指标是免费获得的。
-
 ## 在 Spark UI 中阅读 Gluten 指标
 
 Gluten 的指标出现在同一个 Spark SQL 标签页中，因为它们使用相同的 `SQLMetric` 框架。算子名称有所变化（例如 `HashAggregateExecTransformer` 替代了 `HashAggregateExec`），但当你点击算子节点时，指标仍出现在同一个侧边面板中。
@@ -270,9 +288,9 @@ JSON 输出将包含所有 Gluten 特有的指标以及原生 Spark 指标，使
 
 Gluten 的指标系统为扩展 Spark 的可观测性提供了几个重要启示：
 
-**引擎替换 > 包装，实现全面指标。** 包装现有算子（如 DataFlint）只能测量包装边界外发生的事情。替换引擎意味着你控制了执行管道内的每一个测量点。Gluten 证明了在每个算子上实现计时是可以做到的——你只需要一个不在 JVM 层面融合算子的引擎架构。
+**引擎替换自然带来全面指标。** 当引擎控制每个算子的执行时，它可以测量每一个边界。每个 C++ 算子都是独立的函数调用，拥有自己的开始和结束时间戳。
 
-**MetricsUpdater 模式是可复用的。** 任何原生后端都可以采用这一模式：定义一棵轻量级的、可序列化的 updater 对象树来镜像计划，通过 JNI 传输批量指标数组，然后遍历树来更新 `SQLMetric` 累加器。这一模式干净地分离了三个关注点：指标定义（第一层）、指标桥接（第二层）和指标收集（第三层）。
+**MetricsUpdater 模式是可复用的。** 任何原生后端都可以采用这一模式：定义一棵轻量级的、可序列化的 updater 对象树来镜像计划，通过 JNI 传输批量指标数组，然后遍历树来更新 `SQLMetric` 累加器。
 
 **基于 JNI 数组的传输将开销降到最低。** Gluten 没有为每次指标更新都回调 JVM，而是将所有指标批量打包到 `long[]` 数组中——每个任务一次批量 JNI 传输。即使每个算子有 60+ 个指标，指标开销也可以忽略不计。
 

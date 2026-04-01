@@ -14,13 +14,9 @@ This is a bonus Part 4 of the Spark SQL Metrics series:
 - [Part 3: Extension APIs, UI rendering, and REST API](/posts/spark/sql-metrics-part3-extension-api/)
 - **Part 4 (this post)**: How Gluten extends the metrics system
 
-## The Problem Gluten Solves for Metrics
+## How Gluten's Native Engine Produces Metrics
 
-In [Part 1](/posts/spark/understanding-sql-metrics/), we noted that vanilla Spark has only **7 operators** with timing metrics: `HashAggregateExec`, `SortExec`, `SortMergeJoinExec`, `ShuffledHashJoinExec`, `BroadcastExchangeExec`, `ShuffleExchangeExec`, and `DataSourceScanExec`. Most operators that live inside a `WholeStageCodegen` cluster can't have individual timing because they are fused into a single JVM method — once the JVM compiles them together, there's no boundary left to measure.
-
-Apache Gluten takes a fundamentally different approach: it replaces the JVM execution engine entirely with a native C++ engine — either [Velox](https://github.com/facebookincubator/velox) or [ClickHouse](https://github.com/ClickHouse/ClickHouse). Because native operators execute independently (they are not fused by JVM codegen), **every operator can have individual timing**. This is not a workaround like DataFlint, which wraps existing Spark operators with extra measurement code. It is a natural consequence of replacing the engine entirely — each C++ operator is a separate function call with its own start and end timestamps.
-
-The result: Gluten surfaces **60+ metrics** that vanilla Spark simply does not have, including per-operator wall clock time, per-phase join metrics, native spill tracking, dynamic filter statistics, and I/O breakdowns by storage tier.
+Apache Gluten replaces the JVM execution engine with a native C++ engine — either [Velox](https://github.com/facebookincubator/velox) or [ClickHouse](https://github.com/ClickHouse/ClickHouse). Because native operators execute independently (not fused by JVM codegen), each C++ operator is a separate function call with its own timing infrastructure. As a natural consequence, Gluten surfaces **60+ metrics** per operator, including wall clock time, per-phase join metrics, native spill tracking, dynamic filter statistics, and I/O breakdowns by storage tier.
 
 ## The 3-Layer Architecture
 
@@ -115,7 +111,44 @@ In vanilla Spark, most operators report only `numOutputRows`. In Gluten, **every
 | `outputBytes` | size | Output data volume in columnar format |
 | `loadLazyVectorTime` | timing | Time loading lazy-evaluated vectors |
 
-Having `wallNanos` on every operator is transformative. In vanilla Spark, if a query is slow and the bottleneck is inside a `WholeStageCodegen` cluster, you have no way to tell which operator is responsible. With Gluten, you can immediately see that `FilterExecTransformer` took 200 ms while the adjacent `ProjectExecTransformer` took 5 ms.
+Having `wallNanos` on every operator makes it straightforward to identify bottleneck operators in native execution.
+
+### Understanding wallNanos and cpuCount
+
+These two metrics deserve special attention because they are the most important for performance analysis.
+
+Both originate from Velox's `CpuWallTiming` structure, which is collected via RAII timers (`DeltaCpuWallTimer`) wrapping each operator's `getOutput()` call:
+
+```cpp
+struct CpuWallTiming {
+  uint64_t count;      // Number of getOutput() invocations (batch count)
+  uint64_t wallNanos;  // Total wall-clock time (steady_clock, nanoseconds)
+  uint64_t cpuNanos;   // Total CPU time (CLOCK_THREAD_CPUTIME_ID, nanoseconds)
+};
+```
+
+**wallNanos** — measured with `std::chrono::steady_clock`. Captures total real elapsed time, **including** any time the operator spends blocked waiting for its child to produce data, I/O waits, or thread scheduling delays.
+
+**cpuCount** — despite the name, this is actually the **invocation count** (number of `getOutput()` calls = number of batches processed), not CPU time. The Gluten JNI bridge maps `CpuWallTiming.count` to the `cpuCount` metric.
+
+**How to interpret:**
+
+| Scenario | wallNanos | cpuCount | What It Means |
+|----------|:---------:|:--------:|---------------|
+| Large data, even work | High | High | Many batches processed, expected |
+| Few batches, each slow | High | Low | Possible skew or complex per-batch work |
+| Leaf operator (scan) | High | — | Mostly I/O time (check `ioWaitTime` separately) |
+| Middle operator (filter) | High | — | Includes wait for child — compare with child's wallNanos |
+
+**Important caveat — wallNanos includes child waiting:**
+
+Because `wallNanos` wraps the entire `getOutput()` call, a parent operator's wallNanos includes time spent blocked waiting for its child to produce data. This means:
+
+- For a **leaf operator** (scan): wallNanos ≈ I/O + compute time
+- For a **middle operator** (filter above a scan): wallNanos = own compute + child's scan time
+- **You cannot simply sum wallNanos across all operators** — that would double-count
+
+To isolate an operator's own contribution, compare its wallNanos with its child's wallNanos. The difference is the operator's own processing time. Velox also tracks some I/O-specific metrics separately (`ioWaitTime`, `dataSourceReadTime`) to help separate pure I/O from compute.
 
 ### Scan-Specific Metrics
 
@@ -207,23 +240,6 @@ In vanilla Spark, a slow join gives you almost nothing to work with — you know
 | `writeIOTime` | I/O time during writes |
 | `numWrittenFiles` | Number of files produced |
 
-## Gluten vs Vanilla Spark vs DataFlint
-
-To put Gluten's metrics in perspective, here's a comparison with vanilla Spark and [DataFlint](https://www.dataflinttool.com/) (a third-party monitoring plugin that wraps Spark operators to add timing):
-
-| Aspect | Vanilla Spark | DataFlint | Gluten |
-|--------|--------------|-----------|--------|
-| Per-operator timing | 7 operators only | Adds to ~10 more (Python UDF, Window) | **Every operator** |
-| Implementation | Built-in SQLMetric | SparkSessionExtensions wrapping | Native C++ engine replacement |
-| Spill detail | Per-stage only | Same as Spark | Per-operator, per-phase (build/probe) |
-| Dynamic filters | Not tracked | Not tracked | Produced/accepted/rows eliminated |
-| Scan I/O detail | `scanTime` only | Same as Spark | `ioWaitTime`, storage/local/RAM breakdown |
-| Memory per operator | HashAggregate + Sort only | Same as Spark | Every operator |
-| Columnar metrics | Basic (ColumnarToRow) | Same as Spark | `outputVectors`, `outputBytes` per operator |
-| Join phase breakdown | None | None | Separate build/probe metrics (20+ each) |
-
-DataFlint and Gluten are not competing approaches — they solve different problems. DataFlint adds observability to an existing JVM-based Spark deployment. Gluten replaces the execution engine entirely, and comprehensive metrics are a byproduct of that architectural choice. If you're already using Gluten for native acceleration, you get the metrics for free.
-
 ## Reading Gluten Metrics in the Spark UI
 
 Gluten metrics appear in the same Spark SQL tab because they use the same `SQLMetric` framework. The operator names change (e.g., `HashAggregateExecTransformer` instead of `HashAggregateExec`) but metrics appear in the same side panel when you click on an operator node.
@@ -270,9 +286,9 @@ The JSON output will contain all the Gluten-specific metrics alongside vanilla S
 
 Gluten's metrics system offers several insights about extending Spark's observability:
 
-**Engine replacement > wrapping for comprehensive metrics.** Wrapping existing operators (like DataFlint does) can only measure what happens outside the wrapped boundary. Replacing the engine means you control every measurement point inside the execution pipeline. Gluten proves that per-operator timing on every operator is achievable — you just need an engine architecture that doesn't fuse operators together at the JVM level.
+**Engine replacement provides comprehensive metrics naturally.** When the engine controls every operator's execution, it can measure every boundary. Each C++ operator is a separate function call with its own start and end timestamps — per-operator timing on every operator is achievable without any workarounds.
 
-**The MetricsUpdater pattern is reusable.** Any native backend can adopt this pattern: define a tree of lightweight, serializable updater objects that mirror the plan, transfer bulk metric arrays via JNI, and walk the tree to update `SQLMetric` accumulators. This pattern cleanly separates the three concerns: metric definition (Layer 1), metric bridging (Layer 2), and metric collection (Layer 3).
+**The MetricsUpdater pattern is reusable.** Any native backend can adopt this pattern: define a tree of lightweight, serializable updater objects that mirror the plan, transfer bulk metric arrays via JNI, and walk the tree to update `SQLMetric` accumulators.
 
 **JNI array-based transfer minimizes overhead.** Instead of calling back into the JVM for every metric update, Gluten batches all metrics into `long[]` arrays — one bulk JNI transfer per task. This keeps the metrics overhead negligible even with 60+ metrics per operator.
 
