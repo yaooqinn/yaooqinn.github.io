@@ -69,7 +69,7 @@ public CustomMetric[] supportedCustomMetrics() {
 
 **第三步：在 `PartitionReader` 中报告值。**
 
-每个 `PartitionReader` 在 Spark 调用 `currentMetricsValues()` 时报告当前指标值。此方法在任务执行期间被周期性调用，以及在任务完成时调用：
+每个 `PartitionReader` 在 Spark 调用 `currentMetricsValues()` 时报告当前指标值。此方法每处理 100 行（由 `CustomMetrics.NUM_ROWS_PER_UPDATE` 控制）调用一次，以及在任务完成时调用：
 
 ```java
 @Override
@@ -84,6 +84,10 @@ public CustomTaskMetric[] currentMetricsValues() {
 ```
 
 就是这样——你的自定义指标现在将在 Spark UI 中与内置指标一起显示。
+
+### 写入端自定义指标
+
+自定义指标不仅限于读取。写入连接器也可以通过 `BatchWrite.supportedCustomMetrics()` 定义自定义指标，值通过 `DataWriter.currentMetricsValues()` 报告。这对于压缩率、刷新次数或写入路径上的批处理统计等指标非常有用。
 
 ### Spark 内部如何处理自定义指标
 
@@ -249,7 +253,7 @@ spark.listenerManager.register(new QueryExecutionListener {
 })
 ```
 
-这个监听器在每次成功的查询执行后触发，让你可以访问已执行的物理计划，遍历算子并直接读取它们的指标值。
+这个监听器在每次成功的查询执行后触发，让你可以访问已执行的物理计划，遍历算子并以**原始 `Long` 值**直接读取指标——这是获取未经显示格式化和四舍五入的指标值的唯一方式。
 
 ### 从 DataFrame 执行中访问指标
 
@@ -266,6 +270,8 @@ metrics.foreach { case (accId, value) => println(s"$accId: $value") }
 ```
 
 这种方式对于集成测试中断言特定优化是否生效（例如"裁剪的文件数" > 0）或在 Notebook 中不切换 UI 即可检查性能非常有用。
+
+> **注意：** `spark.sharedState.statusStore` 是内部 API，仅在驱动端可用。在 Spark Connect 模式下，客户端无法访问 status store——请改用 REST API。
 
 ## 系列总结
 

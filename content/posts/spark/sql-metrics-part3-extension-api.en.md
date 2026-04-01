@@ -69,7 +69,7 @@ public CustomMetric[] supportedCustomMetrics() {
 
 **Step 3: Report values from your `PartitionReader`.**
 
-Each `PartitionReader` reports its current metric values whenever Spark calls `currentMetricsValues()`. This is called periodically during task execution and at task completion:
+Each `PartitionReader` reports its current metric values whenever Spark calls `currentMetricsValues()`. This is called every 100 rows (controlled by `CustomMetrics.NUM_ROWS_PER_UPDATE`) and at task completion:
 
 ```java
 @Override
@@ -84,6 +84,10 @@ public CustomTaskMetric[] currentMetricsValues() {
 ```
 
 That's it — your custom metric will now appear in the Spark UI alongside the built-in ones.
+
+### Write-Side Custom Metrics
+
+Custom metrics aren't limited to reads. Write connectors can also define custom metrics through `BatchWrite.supportedCustomMetrics()`, with values reported via `DataWriter.currentMetricsValues()`. This is useful for metrics like compression ratios, flush counts, or batching statistics on the write path.
 
 ### How Spark Processes Custom Metrics Internally
 
@@ -249,7 +253,7 @@ spark.listenerManager.register(new QueryExecutionListener {
 })
 ```
 
-This listener fires after every successful query execution and gives you access to the executed physical plan, where you can traverse operators and read their metric values directly.
+This listener fires after every successful query execution and gives you access to the executed physical plan, where you can traverse operators and read their metric values directly as **raw `Long` values** — this is the only way to access metrics without the display formatting and rounding applied by the UI and REST API.
 
 ### Accessing Metrics from DataFrame Execution
 
@@ -266,6 +270,8 @@ metrics.foreach { case (accId, value) => println(s"$accId: $value") }
 ```
 
 This approach is useful for integration tests where you want to assert that a specific optimization was applied (e.g., "number of files pruned" > 0) or for notebooks where you want to inspect performance without switching to the UI.
+
+> **Note:** `spark.sharedState.statusStore` is internal API and only available on the driver side. In Spark Connect mode, clients don't have access to the status store — use the REST API instead.
 
 ## Series Conclusion
 
