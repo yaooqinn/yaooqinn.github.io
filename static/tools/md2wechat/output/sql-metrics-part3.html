@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>深入 Spark SQL Metrics（第三部分）：扩展 API、UI 渲染与 REST API</title></head>
+<body>
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif; font-size: 16px; line-height: 1.8; color: #333; max-width: 100%; padding: 10px;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; color: #999; font-size: 14px;">Spark SQL Metrics 三部曲的第三部分（终章）</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">DataSource V2 CustomMetric API</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">如果你正在构建自定义连接器，需要暴露连接器特有的数据——例如读取字节数、缓存命中率或限流次数——从 Spark 3.2 开始，DataSource V2 API 提供了干净的扩展点。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">接口层次结构</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">CustomMetric</strong>——在连接器中定义一次，描述指标是什么：</p>
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">name()</code>、<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">description()</code>——名称和描述</li>
+<li style="margin: 8px 0; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">aggregateTaskMetrics(long[])</code>——你决定如何聚合各任务的值</li>
+<li style="margin: 8px 0; line-height: 1.8;">必须有<strong style="color: #07c160; font-weight: bold;">无参构造函数</strong>（Spark 通过反射实例化）</li>
+</ul>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">CustomTaskMetric</strong>——由 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">PartitionReader</code> 在 Executor 上报告，包含 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">name()</code> + <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">value()</code>。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">内置基类：</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">类</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">聚合逻辑</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">输出格式</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">CustomSumMetric</td><td style="padding: 8px; border: 1px solid #e8e8e8;">求和</td><td style="padding: 8px; border: 1px solid #e8e8e8;">String.valueOf(sum)</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;">CustomAvgMetric</td><td style="padding: 8px; border: 1px solid #e8e8e8;">平均值</td><td style="padding: 8px; border: 1px solid #e8e8e8;">#0.000 格式</td></tr>
+</table>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">三步实现自定义指标</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">第一步：</strong>定义指标类</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">public class MyBytesReadMetric extends CustomSumMetric {
+    @Override public String name() { return "myBytesRead"; }
+    @Override public String description() { return "bytes read from my source"; }
+}</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">第二步：</strong>在 Scan 中注册</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">@Override
+public CustomMetric[] supportedCustomMetrics() {
+    return new CustomMetric[] { new MyBytesReadMetric() };
+}</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">第三步：</strong>在 PartitionReader 中报告（每 100 行调用一次）</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">@Override
+public CustomTaskMetric[] currentMetricsValues() {
+    return new CustomTaskMetric[] {
+        new CustomTaskMetric() {
+            public String name() { return "myBytesRead"; }
+            public long value() { return bytesReadSoFar; }
+        }
+    };
+}</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">就这样——自定义指标将在 Spark UI 中与内置指标一起显示。写入端也支持，通过 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">BatchWrite.supportedCustomMetrics()</code> 和 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">DataWriter.currentMetricsValues()</code>。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">UI 中的指标渲染</h2>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">渲染管道</h3>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">SQLAppStatusStore.executionMetrics(id)
+    → Map[accumulatorId → formatted String]
+
+ExecutionPage.planVisualization()
+    → graph.makeDotFile(metrics)        # 紧凑 DOT 标签
+    → graph.makeNodeDetailsJson(metrics) # 完整指标 JSON
+
+spark-sql-viz.js
+    → renderPlanViz()                    # dagre-d3 图形
+    → getNodeDetails()                   # 解析 JSON
+    → updateDetailsPanel()              # 点击侧边面板
+    → rerenderWithDetailedLabels()       # 内联模式</code></pre>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">紧凑模式 vs 详细模式</h3>
+
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">紧凑模式</strong>（默认）：节点仅显示算子名，点击打开侧边面板查看指标</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">详细模式</strong>（复选框）：10px 字号内联显示在节点内</li>
+<li style="margin: 8px 0; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">Stage/Task 切换</strong>：最大值旁添加 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">(stage X: task Y)</code> 标注</li>
+</ul>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">REST API</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">主要端点：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">GET /api/v1/applications/{appId}/sql/{executionId}
+    ?details=true&amp;planDescription=true</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">关键要点：<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">Metric</code> 仅是 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">{name: String, value: String}</code>——返回格式化后的显示字符串，而非原始数值。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">通过 spark-history-cli 访问</h3>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;"># 结构化 JSON 输出
+spark-history-cli --json -a &lt;app&gt; sql          # 列出所有 SQL 执行
+spark-history-cli --json -a &lt;app&gt; sql &lt;id&gt;     # 单次执行及其指标
+spark-history-cli -a &lt;app&gt; sql-plan &lt;id&gt; --view final  # AQE 后计划</code></pre>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">实用示例</h2>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">用 Spark Listener 捕获原始指标值</h3>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">spark.listenerManager.register(new QueryExecutionListener {
+  override def onSuccess(funcName: String, qe: QueryExecution,
+      durationNs: Long): Unit = {
+    val metrics = qe.executedPlan.collectLeaves().flatMap(_.metrics)
+    metrics.foreach { case (name, metric) =&gt;
+      println(s"$name: ${metric.value}")  // 原始 Long 值！
+    }
+  }
+  override def onFailure(...): Unit = {}
+})</code></pre>
+
+<blockquote style="border-left: 4px solid #07c160; background: #e8f7ef; padding: 12px 15px; margin: 15px 0; border-radius: 0 8px 8px 0; color: #666;">
+<p style="margin: 5px 0;">这是获取未经格式化和四舍五入的<strong style="color: #07c160;">原始 Long 指标值的唯一方式</strong>。REST API 和 UI 都返回格式化后的字符串。</p>
+</blockquote>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">系列总结</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">三个视角——<strong style="color: #07c160; font-weight: bold;">指标测量什么</strong>、<strong style="color: #07c160; font-weight: bold;">内部如何工作</strong>、<strong style="color: #07c160; font-weight: bold;">如何扩展和访问</strong>——共同构成了使用 SQL Metrics 进行性能调试、监控和连接器开发的完整知识体系。</p>
+
+<hr style="border: none; height: 1px; background: linear-gradient(to right, transparent, #07c160, transparent); margin: 25px 0;">
+
+<section style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #999;">
+<p style="font-weight: bold; color: #666;">参考链接</p>
+<p>[1] 博客原文 https://yaooqinn.github.io/zh/posts/spark/sql-metrics-part3-extension-api/</p>
+<p>[2] 第一部分 https://yaooqinn.github.io/zh/posts/spark/understanding-sql-metrics/</p>
+<p>[3] 第二部分 https://yaooqinn.github.io/zh/posts/spark/sql-metrics-part2-internals/</p>
+<p>[4] CustomMetric API https://github.com/apache/spark/blob/master/sql/catalyst/src/main/java/org/apache/spark/sql/connector/metric/CustomMetric.java</p>
+<p>[5] spark-history-cli https://github.com/yaooqinn/spark-history-cli</p>
+</section>
+
+</div>
+</body>
+</html>

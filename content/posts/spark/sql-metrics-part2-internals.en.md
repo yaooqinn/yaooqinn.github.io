@@ -12,6 +12,7 @@ This is Part 2 of a 3-part series on Spark SQL Metrics:
 - [Part 1: Metric types, complete reference, and what they mean](/posts/spark/understanding-sql-metrics/)
 - **Part 2 (this post)**: How metrics work internally, and how AQE uses them for runtime decisions
 - [Part 3: Extension APIs, UI rendering, and REST API](/posts/spark/sql-metrics-part3-extension-api/)
+- [Part 4: How Gluten extends the metrics system](/posts/spark/sql-metrics-part4-gluten/)
 
 ## The AccumulatorV2 Lifecycle
 

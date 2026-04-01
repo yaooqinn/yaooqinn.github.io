@@ -12,6 +12,7 @@ showToc: true
 - [第一部分：指标类型、完整参考和含义](/zh/posts/spark/understanding-sql-metrics/)
 - [第二部分：内部实现机制，以及 AQE 如何利用指标做出运行时决策](/zh/posts/spark/sql-metrics-part2-internals/)
 - **第三部分（本文）**：扩展 API、UI 渲染和 REST API
+- [第四部分：Gluten 如何扩展指标系统](/zh/posts/spark/sql-metrics-part4-gluten/)
 
 ## DataSource V2 CustomMetric API
 

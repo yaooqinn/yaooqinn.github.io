@@ -12,6 +12,7 @@ This is Part 3 of a 3-part series on Spark SQL Metrics:
 - [Part 1: Metric types, complete reference, and what they mean](/posts/spark/understanding-sql-metrics/)
 - [Part 2: How metrics work internally, and how AQE uses them for runtime decisions](/posts/spark/sql-metrics-part2-internals/)
 - **Part 3 (this post)**: Extension APIs, UI rendering, and REST API
+- [Part 4: How Gluten extends the metrics system](/posts/spark/sql-metrics-part4-gluten/)
 
 ## The DataSource V2 CustomMetric API
 

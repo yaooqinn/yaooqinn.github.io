@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>深入 Spark SQL Metrics（第二部分）：内部机制与 AQE 的运行时决策</title></head>
+<body>
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif; font-size: 16px; line-height: 1.8; color: #333; max-width: 100%; padding: 10px;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; color: #999; font-size: 14px;">Spark SQL Metrics 三部曲的第二部分</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">AccumulatorV2 生命周期</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">每个 SQL 指标都是一个 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">SQLMetric</code>，它继承自 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">AccumulatorV2[Long, Long]</code>。任务在 Executor 上运行时，使用的是累加器的<strong style="color: #07c160; font-weight: bold;">本地副本</strong>。算子代码通过 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">metric += value</code> 来更新指标——执行过程中不产生任何网络通信。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">从任务到驱动端</h3>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">Task (Executor)           Driver
+─────────────           ──────
+metric.add(value)        
+    ↓                    
+Task completes →────→ onTaskEnd()
+                         ↓
+                    Store in LiveStageMetrics
+                         ↓
+                    aggregateMetrics()
+                         ↓
+                    MetricUtils.stringValue()
+                         ↓
+                    Map[accId → "512.0 MiB (min, med, max)"]
+                         ↓
+                    Persist to KVStore</code></pre>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">任务完成后，驱动端通过 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">SparkListener</code> 事件接收累加器更新。<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">SQLAppStatusListener</code> 处理 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">onTaskEnd()</code>——提取指标值并存储到 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">LiveStageMetrics</code> 中。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">聚合与存储</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">对于<strong style="color: #07c160; font-weight: bold;">已完成</strong>的执行，指标经过 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">aggregateMetrics()</code> 计算 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">total (min, med, max)</code> 分布，格式化为字符串后持久化到 KVStore。原始每任务值随后被丢弃。</p>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">对于<strong style="color: #07c160; font-weight: bold;">正在运行</strong>的执行，聚合是实时计算的。每次刷新 SQL 标签页，都会从内存中的任务值重新计算。这就是查询运行时指标能近实时更新的原因。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">驱动端指标</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">并非所有指标都来自任务。子查询执行时间和广播时间直接在驱动端产生，通过 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-family: Monaco, Menlo, Consolas, monospace; font-size: 14px;">SQLMetrics.postDriverMetricUpdates()</code> 上报，完全绕过任务生命周期。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">AQE 如何利用统计信息做出运行时决策</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">这里很关键：<strong style="color: #07c160; font-weight: bold;">AQE 不使用 SQL Metrics</strong>。它使用完全独立的数据源——<strong style="color: #07c160; font-weight: bold;">MapOutputStatistics</strong>。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">数据流转过程</h3>
+
+<ol style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">ShuffleExchangeExec</code> 提交 Shuffle Map Stage</li>
+<li style="margin: 8px 0; line-height: 1.8;">Map 任务运行，将 Shuffle 数据写入本地磁盘</li>
+<li style="margin: 8px 0; line-height: 1.8;">所有 Map 任务完成后，<code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">MapOutputTracker</code> 精确知道每个 Reducer 分区的字节数</li>
+<li style="margin: 8px 0; line-height: 1.8;">信息封装为 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">MapOutputStatistics</code>，包含 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">bytesByPartitionId: Array[Long]</code></li>
+<li style="margin: 8px 0; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">AdaptiveSparkPlanExec</code> 在 Stage 物化<strong style="color: #07c160; font-weight: bold;">之后</strong>运行优化规则</li>
+</ol>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">核心要点：AQE 等待 Shuffle Stage 完成，然后利用<strong style="color: #07c160; font-weight: bold;">实际输出大小</strong>决定下一步操作。</p>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">CoalesceShufflePartitions——合并小分区</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">读取 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">bytesByPartitionId</code>，将相邻小分区合并至目标大小（默认 64 MB）。</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">配置项</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">默认值</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">用途</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">advisoryPartitionSizeInBytes</td><td style="padding: 8px; border: 1px solid #e8e8e8;">64 MB</td><td style="padding: 8px; border: 1px solid #e8e8e8;">合并后分区目标大小</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;">coalescePartitions.minPartitionNum</td><td style="padding: 8px; border: 1px solid #e8e8e8;">（无）</td><td style="padding: 8px; border: 1px solid #e8e8e8;">最小分区数</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">coalescePartitions.minPartitionSize</td><td style="padding: 8px; border: 1px solid #e8e8e8;">1 MB</td><td style="padding: 8px; border: 1px solid #e8e8e8;">不会创建小于此值的分区</td></tr>
+</table>
+
+<h3 style="font-size: 18px; font-weight: bold; color: #1a1a1a; margin: 20px 0 12px 0;">OptimizeSkewedJoin——拆分倾斜分区</h3>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">读取 Join 两侧的 <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">bytesByPartitionId</code>，计算中位数，满足以下条件的分区被标记为倾斜：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;">size > max(skewThreshold, median × skewFactor)</code></pre>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">配置项</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">默认值</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">用途</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">skewedPartitionThresholdInBytes</td><td style="padding: 8px; border: 1px solid #e8e8e8;">256 MB</td><td style="padding: 8px; border: 1px solid #e8e8e8;">绝对最小阈值</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;">skewedPartitionFactor</td><td style="padding: 8px; border: 1px solid #e8e8e8;">5.0</td><td style="padding: 8px; border: 1px solid #e8e8e8;">必须达到中位数的倍数</td></tr>
+</table>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">两个条件必须<strong style="color: #07c160; font-weight: bold;">同时满足</strong>。倾斜分区被拆分为目标大小（64 MB）的子分区，Join 的非倾斜侧被复制以匹配。</p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">核心区别：SQL Metrics vs AQE 统计信息</h2>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;"></th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">SQL Metrics</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">AQE 统计信息</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><strong style="color: #07c160;">是什么</strong></td><td style="padding: 8px; border: 1px solid #e8e8e8;">SQLMetric 累加器</td><td style="padding: 8px; border: 1px solid #e8e8e8;">MapOutputStatistics</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><strong style="color: #07c160;">目的</strong></td><td style="padding: 8px; border: 1px solid #e8e8e8;">可观测性（UI 显示）</td><td style="padding: 8px; border: 1px solid #e8e8e8;">运行时计划优化</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><strong style="color: #07c160;">数据格式</strong></td><td style="padding: 8px; border: 1px solid #e8e8e8;">格式化字符串</td><td style="padding: 8px; border: 1px solid #e8e8e8;">原始 Long[] 数组</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;"><strong style="color: #07c160;">计算时机</strong></td><td style="padding: 8px; border: 1px solid #e8e8e8;">每个任务完成后</td><td style="padding: 8px; border: 1px solid #e8e8e8;">Stage 所有 Map 任务完成后</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;"><strong style="color: #07c160;">消费者</strong></td><td style="padding: 8px; border: 1px solid #e8e8e8;">Spark UI、REST API、用户</td><td style="padding: 8px; border: 1px solid #e8e8e8;">AQE 优化器规则</td></tr>
+</table>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><strong style="color: #07c160; font-weight: bold;">SQL Metrics 告诉你发生了什么，AQE 统计信息决定接下来会发生什么。</strong></p>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">从指标中读取 AQE 的决策</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">AQEShuffleReadExec</code> 是你了解 AQE 决策的窗口：</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px;">
+<tr><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">指标</th><th style="background: #07c160; color: #fff; padding: 10px 8px; text-align: left; font-weight: bold; border: 1px solid #e8e8e8;">含义</th></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">numCoalescedPartitions > 0</td><td style="padding: 8px; border: 1px solid #e8e8e8;">AQE 合并了小分区</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;">numSkewedPartitions > 0</td><td style="padding: 8px; border: 1px solid #e8e8e8;">AQE 检测到了倾斜分区</td></tr>
+<tr><td style="padding: 8px; border: 1px solid #e8e8e8;">numSkewedSplits</td><td style="padding: 8px; border: 1px solid #e8e8e8;">从倾斜分区创建了多少子分区</td></tr>
+<tr style="background: #f9f9f9;"><td style="padding: 8px; border: 1px solid #e8e8e8;">numEmptyPartitions</td><td style="padding: 8px; border: 1px solid #e8e8e8;">检测到的空分区数</td></tr>
+</table>
+
+<blockquote style="border-left: 4px solid #07c160; background: #e8f7ef; padding: 12px 15px; margin: 15px 0; border-radius: 0 8px 8px 0; color: #666;">
+<p style="margin: 5px 0;"><strong style="color: #07c160;">实际示例：</strong>如果你看到 numSkewedPartitions: 3、numSkewedSplits: 12，意味着 AQE 发现 3 个倾斜分区并拆分为 12 个子分区。3 个瓶颈任务变成 12 个并行任务。</p>
+</blockquote>
+
+<blockquote style="border-left: 4px solid #07c160; background: #e8f7ef; padding: 12px 15px; margin: 15px 0; border-radius: 0 8px 8px 0; color: #666;">
+<p style="margin: 5px 0;">如果 numCoalescedPartitions 和 numSkewedPartitions 都为零，说明 AQE 启用了但没有找到需要优化的内容。</p>
+</blockquote>
+
+<h2 style="font-size: 20px; font-weight: bold; color: #07c160; border-left: 4px solid #07c160; padding: 10px 12px; margin: 25px 0 15px 0; background: #e8f7ef; border-radius: 0 4px 4px 0;">通过 SQL 计划理解 AQE</h2>
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8;">对比初始计划和最终计划，可以看到 AQE 在哪里进行了干预：</p>
+
+<pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 15px 0; font-size: 13px; line-height: 1.5;"><code style="background: transparent; color: inherit; padding: 0; font-size: 13px;"># 查看初始计划（AQE 之前）
+spark-history-cli -a &lt;app-id&gt; sql-plan &lt;id&gt; --view initial
+
+# 查看最终计划（AQE 之后）
+spark-history-cli -a &lt;app-id&gt; sql-plan &lt;id&gt; --view final</code></pre>
+
+<ul style="padding-left: 25px; margin: 12px 0;">
+<li style="margin: 8px 0; line-height: 1.8;"><code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">ShuffleExchangeExec</code> → <code style="background: #f8f8f8; color: #c7254e; padding: 2px 6px; border-radius: 3px; font-size: 14px;">AQEShuffleReadExec</code>：应用了 Shuffle 优化</li>
+<li style="margin: 8px 0; line-height: 1.8;">Join 策略改变：Sort Merge Join → Broadcast Hash Join</li>
+<li style="margin: 8px 0; line-height: 1.8;">分区数变化：发生了合并或拆分</li>
+</ul>
+
+<hr style="border: none; height: 1px; background: linear-gradient(to right, transparent, #07c160, transparent); margin: 25px 0;">
+
+<p style="margin: 12px 0; text-align: justify; line-height: 1.8; font-style: italic; color: #999;">本文是 Spark SQL Metrics 三部曲的第二部分。第一部分介绍了五种指标类型和完整参考，第三部分将涵盖 CustomMetric 扩展 API、UI 渲染和 REST API。完整内容请访问博客原文。</p>
+
+<section style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #999;">
+<p style="font-weight: bold; color: #666;">参考链接</p>
+<p>[1] 博客原文 https://yaooqinn.github.io/zh/posts/spark/sql-metrics-part2-internals/</p>
+<p>[2] 第一部分 https://yaooqinn.github.io/zh/posts/spark/understanding-sql-metrics/</p>
+<p>[3] 第三部分 https://yaooqinn.github.io/zh/posts/spark/sql-metrics-part3-extension-api/</p>
+<p>[4] spark-history-cli https://github.com/yaooqinn/spark-history-cli</p>
+</section>
+
+</div>
+</body>
+</html>
