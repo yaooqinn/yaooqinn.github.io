@@ -70,58 +70,15 @@ Operators WITH timing execute **outside** the codegen boundary: aggregations (ha
 
 Operators **missing** timing that probably should have it are the ones that **break codegen**: `WindowExec`, Python UDF operators, `CartesianProductExec`, `BroadcastNestedLoopJoinExec`. [DataFlint](https://github.com/dataflint/spark) fills this gap by adding `duration` to these operators.
 
-## Precision Loss
-
-The REST API and Web UI show formatted strings, not raw numbers. Precision is lost:
-
-### Size metrics: `%.1f` rounding
-```
-536,870,913 bytes → "512.0 MiB"  (lost 1 byte)
-```
-For GiB-scale values, ~50 MiB of precision can be lost.
-
-### Timing metrics: progressive rounding
-```
-1,234 ms  → "1.2 s"     (lost 34ms)
-65,432 ms → "1.1 m"     (lost 5.4 seconds)
-7,384,000 ms → "2.05 h" (lost ~12 seconds)
-```
-
-### nsTiming: double rounding
-Nanoseconds truncated to milliseconds first, then formatted — two levels of loss.
-
-### Sum metrics: exact
-`1,234,567` means exactly 1,234,567. The only safe type.
-
-## The REST API Gap
-
-```json
-{"name": "peak memory", "value": "total (min, med, max)\n512.0 MiB (...)"}
-```
-
-Missing: raw numeric values and metric type. Tools must regex-parse display strings — fragile and lossy. Adding `rawValue` + `metricType` fields would be backward-compatible.
-
-## Naming: No Standard
-
-```scala
-"numOutputRows" -> createMetric(sparkContext, "number of output rows")
-```
-
-Two free-form strings, no validation. Inconsistencies exist:
-- `"data size (bytes)"` vs `"data size"` — same metric, different names
-- `"time to collect (ms)"` vs `"time to collect"` — one hardcodes units
-
 ## Practical Takeaways
 
 1. **Look at min/med/max, not just total.** "10 GiB peak memory" might be even (100 MiB × 100 tasks) or skewed (one task at 9 GiB).
 
 2. **Missing timing ≠ fast.** Python UDFs and window functions are often the slowest but have no timing by default.
 
-3. **Don't over-trust small differences.** "1.5 GiB" and "1.5 GiB" could differ by 150 MiB due to rounding.
+3. **Web UI and REST API are identical.** Same `Map[Long, String]`. No hidden detail view.
 
-4. **Web UI and REST API are identical.** Same `Map[Long, String]`. No hidden detail view.
-
-5. **WholeStageCodegen changes what's measurable.** Individual operator timing inside codegen is not available — only the cluster's stage duration.
+4. **WholeStageCodegen changes what's measurable.** Individual operator timing inside codegen is not available — only the cluster's stage duration.
 
 ---
 
