@@ -254,11 +254,20 @@ total (min, med, max)
 | `dataSize` | data size | size | `SubqueryBroadcastExec` |
 | `collectTime` | time to collect | timing | `SubqueryBroadcastExec` |
 
+### Columnar Batch Operators
+
+| Metric | Display Name | Type | Operators |
+|--------|-------------|------|-----------|
+| `numInputBatches` | number of input batches | sum | Columnar transitions |
+| `numOutputBatches` | number of output batches | sum | Columnar transitions |
+| `numInputRows` | number of input rows | sum | Columnar transitions |
+| `numOutputRows` | number of output rows | sum | Columnar transitions |
+
 ## WholeStageCodegen and Metric Scope
 
 Most operators (`FilterExec`, `ProjectExec`, `HashAggregateExec`, joins) are fused by WholeStageCodegen into a single JVM method. Their row count metrics (`numOutputRows`) are individually accurate, but they don't have individual timing because they execute as one compiled function.
 
-Operators that execute **outside** codegen and have their own timing:
+Operators that have phases executing **outside** the codegen pipeline and have their own timing:
 - `SortExec` (sort time)
 - Aggregations (aggregation build time)
 - `ShuffledHashJoinExec` (hash map build time)

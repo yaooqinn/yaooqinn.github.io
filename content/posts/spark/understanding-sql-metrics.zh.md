@@ -193,7 +193,7 @@ total (min, med, max)
 
 大多数算子被 WholeStageCodegen 融合成单一 JVM 方法。它们的行数指标（`numOutputRows`）各自准确，但没有各自的计时——因为它们作为一个编译函数执行。
 
-在代码生成边界之外执行并有独立计时的算子：
+在**代码生成管道之外**有独立执行阶段并具有独立计时的算子：
 - `SortExec`（排序时间）
 - 聚合算子（聚合构建时间）
 - `ShuffledHashJoinExec`（哈希表构建时间）
