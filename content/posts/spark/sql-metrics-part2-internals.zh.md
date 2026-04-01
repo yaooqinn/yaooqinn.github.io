@@ -11,7 +11,7 @@ showToc: true
 
 - [第一部分：指标类型、完整参考和含义](/zh/posts/spark/understanding-sql-metrics/)
 - **第二部分（本文）**：内部实现机制，以及 AQE 如何利用指标做出运行时决策
-- 第三部分：扩展 API、UI 渲染和 REST API
+- [第三部分：扩展 API、UI 渲染和 REST API](/zh/posts/spark/sql-metrics-part3-extension-api/)
 
 ## AccumulatorV2 生命周期
 
@@ -57,7 +57,6 @@ Task completes →────→ onTaskEnd()
 
 - **子查询执行时间** ——标量子查询运行时，驱动端计时并上报结果
 - **广播时间** ——驱动端将表广播到各 Executor 花费的时间
-- **AQE 相关计时** ——自适应优化花费的时间
 
 这些驱动端指标使用 `SQLMetrics.postDriverMetricUpdates()`，直接在驱动端更新累加器，无需经过任务生命周期，完全绕过了 `onTaskEnd()` 路径。
 
@@ -115,7 +114,11 @@ size > max(skewThreshold, median × skewFactor)
 
 一旦识别出倾斜分区，AQE 会将其拆分为较小的子分区，每个子分区目标大小为 `advisoryPartitionSizeInBytes`（64 MB）。Join 的非倾斜侧会被复制以匹配——倾斜侧的每个子分区都会获得来自另一侧对应分区的完整副本。
 
-### OptimizeLocalShuffleReader——消除 Shuffle 网络 I/O
+### OptimizeShuffleWithLocalRead——消除 Shuffle 网络 I/O
+
+当 AQE 判断 Shuffle 数据可以在本地读取（位于同一 Executor 上）时，它会用配置为本地读取的 `AQEShuffleReadExec` 替换标准的 Shuffle 读取。这完全消除了网络传输——Reducer 直接从本地磁盘读取 Shuffle 文件。
+
+这种优化最常见于广播哈希 Join 之后（此时所有数据已在本地），但也可以应用于其他分区方式允许本地读取的 Shuffle。
 
 当 AQE 判断 Shuffle 数据已经在将要读取它的同一个 Executor 上（共置）时，可以将标准的 `ShuffleExchangeExec` 替换为配置了本地读取的 `AQEShuffleReadExec`。这完全消除了网络传输——Reducer 直接从本地磁盘读取 Shuffle 文件。
 
@@ -180,4 +183,4 @@ spark-history-cli -a <app-id> sql-plan <execution-id> --view final
 
 ---
 
-*在[第一部分](/zh/posts/spark/understanding-sql-metrics/)中，我们介绍了五种指标类型和完整参考。第三部分将涵盖 DataSource V2 `CustomMetric` 扩展 API、UI 如何渲染指标，以及如何通过 REST API 编程查询指标。*
+*在[第一部分](/zh/posts/spark/understanding-sql-metrics/)中，我们介绍了五种指标类型和完整参考。[第三部分](/zh/posts/spark/sql-metrics-part3-extension-api/)将涵盖 DataSource V2 `CustomMetric` 扩展 API、UI 如何渲染指标，以及如何通过 REST API 编程查询指标。*

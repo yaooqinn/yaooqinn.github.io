@@ -11,7 +11,7 @@ showToc: true
 
 - **第一部分（本文）**：指标类型、完整参考和含义
 - 第二部分：内部实现机制，以及 AQE 如何利用指标做出运行时决策
-- 第三部分：扩展 API、UI 渲染和 REST API
+- [第三部分：扩展 API、UI 渲染和 REST API](/zh/posts/spark/sql-metrics-part3-extension-api/)
 
 ## 什么是 SQL Metrics？
 
@@ -204,4 +204,4 @@ total (min, med, max)
 
 ---
 
-*第二部分将深入 SQL Metrics 的内部实现机制（`AccumulatorV2` 生命周期），以及 AQE 如何利用 Shuffle 统计信息在运行时重写查询计划。第三部分将介绍 DataSource V2 `CustomMetric` 扩展 API、UI 渲染和 REST API。*
+*第二部分将深入 SQL Metrics 的内部实现机制（`AccumulatorV2` 生命周期），以及 AQE 如何利用 Shuffle 统计信息在运行时重写查询计划。[第三部分](/zh/posts/spark/sql-metrics-part3-extension-api/)将介绍 DataSource V2 `CustomMetric` 扩展 API、UI 渲染和 REST API。*

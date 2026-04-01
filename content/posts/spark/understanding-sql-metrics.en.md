@@ -11,7 +11,7 @@ This is Part 1 of a 3-part series on Spark SQL Metrics:
 
 - **Part 1 (this post)**: Metric types, complete reference, and what they mean
 - Part 2: How metrics work internally, and how AQE uses them for runtime decisions
-- Part 3: Extension APIs, UI rendering, and REST API
+- [Part 3: Extension APIs, UI rendering, and REST API](/posts/spark/sql-metrics-part3-extension-api/)
 
 ## What Are SQL Metrics?
 
@@ -278,4 +278,4 @@ Operators that have phases executing **outside** the codegen pipeline and have t
 
 ---
 
-*In Part 2, we'll cover how SQL metrics are implemented internally (the `AccumulatorV2` lifecycle), and how AQE uses shuffle statistics at runtime to rewrite query plans. In Part 3, we'll cover the DataSource V2 `CustomMetric` extension API, UI rendering, and the REST API.*
+*In [Part 2](/posts/spark/sql-metrics-part2-internals/), we'll cover how SQL metrics are implemented internally (the `AccumulatorV2` lifecycle), and how AQE uses shuffle statistics at runtime to rewrite query plans. In [Part 3](/posts/spark/sql-metrics-part3-extension-api/), we'll cover the DataSource V2 `CustomMetric` extension API, UI rendering, and the REST API.*

@@ -11,7 +11,7 @@ This is Part 2 of a 3-part series on Spark SQL Metrics:
 
 - [Part 1: Metric types, complete reference, and what they mean](/posts/spark/understanding-sql-metrics/)
 - **Part 2 (this post)**: How metrics work internally, and how AQE uses them for runtime decisions
-- Part 3: Extension APIs, UI rendering, and REST API
+- [Part 3: Extension APIs, UI rendering, and REST API](/posts/spark/sql-metrics-part3-extension-api/)
 
 ## The AccumulatorV2 Lifecycle
 
@@ -57,7 +57,6 @@ Not all metrics come from tasks. Some originate on the driver itself:
 
 - **Subquery execution time** — when a scalar subquery runs, the driver times it and posts the result
 - **Broadcast time** — the time the driver spends broadcasting a table to executors
-- **AQE-related timing** — time spent in adaptive optimization
 
 These driver-side metrics use `SQLMetrics.postDriverMetricUpdates()`, which directly updates the accumulator on the driver without going through the task lifecycle. They bypass `onTaskEnd()` entirely.
 
@@ -115,11 +114,11 @@ Both conditions must be met: the partition must be at least 256 MB **and** at le
 
 Once a skewed partition is identified, AQE splits it into smaller sub-partitions, each targeting `advisoryPartitionSizeInBytes` (64 MB). The non-skewed side of the join is duplicated to match — each sub-partition on the skewed side gets a full copy of the corresponding partition from the other side.
 
-### OptimizeLocalShuffleReader — Eliminating Shuffle Network I/O
+### OptimizeShuffleWithLocalRead — Eliminating Shuffle Network I/O
 
-When AQE determines that the shuffle data is already on the same executor that will read it (co-located), it can replace the standard `ShuffleExchangeExec` with `AQEShuffleReadExec` configured for local reading. This eliminates network transfer entirely — the reducer reads shuffle files directly from the local disk.
+When AQE determines that the shuffle data can be read locally (co-located on the same executor), it replaces the standard shuffle read with `AQEShuffleReadExec` configured for local reading. This eliminates network transfer entirely — the reducer reads shuffle files directly from local disk.
 
-This optimization typically applies after broadcast hash joins, where all the data is already local.
+This optimization most commonly applies after broadcast hash joins (where all data is already local), but can also apply to other shuffles when the partitioning allows local reads.
 
 ### The Distinction: SQL Metrics vs AQE Statistics
 
@@ -180,4 +179,4 @@ This comparison is invaluable when debugging performance issues: you can see whe
 
 ---
 
-*In [Part 1](/posts/spark/understanding-sql-metrics/), we covered the five metric types and the complete reference. In Part 3, we'll cover the DataSource V2 `CustomMetric` extension API, how the UI renders metrics, and how to query them programmatically via the REST API.*
+*In [Part 1](/posts/spark/understanding-sql-metrics/), we covered the five metric types and the complete reference. In [Part 3](/posts/spark/sql-metrics-part3-extension-api/), we'll cover the DataSource V2 `CustomMetric` extension API, how the UI renders metrics, and how to query them programmatically via the REST API.*
