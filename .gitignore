@@ -12,3 +12,5 @@ hugo_stats.json
 # OS
 .DS_Store
 Thumbs.db
+
+copilot-session-*.md
