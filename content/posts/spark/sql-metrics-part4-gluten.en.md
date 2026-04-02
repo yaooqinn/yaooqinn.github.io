@@ -228,10 +228,14 @@ This is arguably Gluten's most powerful metric enhancement. Vanilla Spark's join
 
 **Pre/post projection:**
 
-| Metric | What It Measures |
-|--------|-----------------|
-| Pre-projection timing | Expression evaluation time before join |
-| Post-projection timing | Expression evaluation time after join |
+| Metric | Display Name | What It Measures |
+|--------|-------------|-----------------|
+| `streamPreProjectionWallNanos` | time of stream preProjection | Expression evaluation time on the stream (probe) side before join |
+| `streamPreProjectionCpuCount` | stream preProject cpu wall time count | Batch count for stream pre-projection |
+| `buildPreProjectionWallNanos` | time to build preProjection | Expression evaluation time on the build side before join |
+| `buildPreProjectionCpuCount` | preProject cpu wall time count | Batch count for build pre-projection |
+| `postProjectionWallNanos` | time of postProjection | Expression evaluation time after join |
+| `postProjectionCpuCount` | postProject cpu wall time count | Batch count for post-projection |
 
 In vanilla Spark, a slow join gives you almost nothing to work with — you know it's slow, but not why. With Gluten, you can immediately see: is the build phase slow (maybe the build side is too large)? Is the probe phase slow (maybe hash collisions are causing excessive probing)? Is the build phase spilling (memory pressure)? This level of detail changes how you diagnose join performance.
 

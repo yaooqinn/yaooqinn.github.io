@@ -227,10 +227,14 @@ struct CpuWallTiming {
 
 **前置/后置投影：**
 
-| 指标 | 测量内容 |
-|-----|---------|
-| 前置投影计时 | Join 前表达式求值时间 |
-| 后置投影计时 | Join 后表达式求值时间 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `streamPreProjectionWallNanos` | time of stream preProjection | 流侧（探测侧）Join 前表达式求值时间 |
+| `streamPreProjectionCpuCount` | stream preProject cpu wall time count | 流侧前置投影的批次数 |
+| `buildPreProjectionWallNanos` | time to build preProjection | 构建侧 Join 前表达式求值时间 |
+| `buildPreProjectionCpuCount` | preProject cpu wall time count | 构建侧前置投影的批次数 |
+| `postProjectionWallNanos` | time of postProjection | Join 后表达式求值时间 |
+| `postProjectionCpuCount` | postProject cpu wall time count | 后置投影的批次数 |
 
 在原生 Spark 中，一个慢 Join 几乎不给你任何可用信息——你只知道它很慢，但不知道为什么。有了 Gluten，你可以立即看到：是构建阶段慢（也许构建端数据太大了）？还是探测阶段慢（也许哈希冲突导致了过多的探测）？构建阶段是否在溢出（内存压力）？这种级别的细节彻底改变了你诊断 Join 性能的方式。
 
