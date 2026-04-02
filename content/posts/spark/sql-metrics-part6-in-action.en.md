@@ -22,7 +22,7 @@ In Parts 1–5, we built up all the machinery: metric types, internal plumbing, 
 
 TPC-DS q99 is a 5-table join query that analyzes catalog sales shipping delays by warehouse, ship mode, and call center. It groups shipments into buckets based on how late they arrived (31–60 days, 61–90 days, 91–120 days, and over 120 days), then ranks the results.
 
-We ran this query at **scale factor 10,000** (10 TB of raw data) on a cluster using **Gluten/Velox** as the native execution backend. The underlying storage is **Delta Lake tables on Microsoft Fabric OneLake**.
+We ran this query at **scale factor 10,000** (10 TB of raw data) on a cluster using **Gluten/Velox** as the native execution backend, with Delta Lake tables on cloud object storage.
 
 The query plan follows a classic star-schema pattern:
 
@@ -67,7 +67,7 @@ Think about what this means: the table occupies 910.9 GiB on disk, but we only n
 1. **Columnar format efficiency** — we only read the columns referenced by the query (a fraction of the table's total columns)
 2. **Predicate pushdown to row groups** — Parquet/Delta statistics let Velox skip entire row groups whose min/max ranges don't match the filter predicates
 
-And all 2.1 GiB came from local SSD cache — not a single byte traversed the network to OneLake.
+And all 2.1 GiB came from local SSD cache — not a single byte traversed the network to remote storage.
 
 ### Row Group Pruning
 
