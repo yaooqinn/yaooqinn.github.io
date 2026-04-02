@@ -47,6 +47,8 @@ Every number in this post is real. Let's walk through the metrics, operator by o
 
 The first operator in the plan is `ScanTransformer catalog_sales`. This is where everything starts, and the metrics here tell a rich story.
 
+![Scan Metrics Panel](/images/sql-metrics/q99-scan-metrics.png)
+
 ### Scale
 
 - **`number of raw input rows`**: 3,321,160,461 — 3.3 billion rows in the catalog_sales table
@@ -103,6 +105,8 @@ Looking at the min/median/max breakdown:
 Most tasks process small amounts of data (the table is split across 1,837 partitions), but some partitions are significantly larger. This is typical for real-world data — perfectly uniform partitioning is rare.
 
 ## Section 2: The Four Broadcast Hash Joins — 2.8 Billion Probe Rows
+
+![Join Metrics Panel](/images/sql-metrics/q99-join-metrics.png)
 
 After the scan, the plan chains four broadcast hash joins. Each joins the fact table with a dimension table: `date_dim`, `ship_mode`, `call_center`, and `warehouse`. Let's walk through the `date_dim` join (node [18]) in detail, then summarize the pattern across all four.
 
@@ -164,6 +168,8 @@ The post-projection time is remarkably consistent (~8 seconds each), which makes
 
 ## Section 3: The Aggregation — 2.8B → 2.3M Rows
 
+![Aggregation Metrics Panel](/images/sql-metrics/q99-agg-metrics.png)
+
 After the four joins, the plan applies a `FlushableHashAggregateExecTransformer` (node [10]) for partial aggregation. This is where the data volume drops dramatically.
 
 - **`number of output rows`**: 2,369,250 — a **1,200× reduction** from 2.8 billion input rows
@@ -185,6 +191,8 @@ The entire native pipeline — from scan through all four joins through partial 
 This is the end-to-end time for the native execution pipeline. It encompasses everything we've discussed so far: scanning 3.3 billion rows, four broadcast hash joins on 2.8 billion rows, and partial aggregation down to 2.3 million rows — all executed in Velox's vectorized native engine.
 
 ## Section 4: The Shuffle — Hash-Based, Compact
+
+![Shuffle Metrics Panel](/images/sql-metrics/q99-shuffle-metrics.png)
 
 After partial aggregation, the plan shuffles data via `ColumnarExchange` (node [7]) to redistribute rows by their group-by keys for final aggregation.
 
@@ -213,6 +221,8 @@ Most of the shuffle data (228.3 MiB) was read from remote executors, with a smal
 The shuffle writer type is `hash` (visible in the plan), meaning rows are hash-partitioned by the group-by keys for the final aggregation.
 
 ## Section 5: AQE in Action — 512 → 149 Partitions
+
+![AQE Metrics Panel](/images/sql-metrics/q99-aqe-metrics.png)
 
 After the shuffle, `AQEShuffleRead` (node [6]) kicks in:
 
