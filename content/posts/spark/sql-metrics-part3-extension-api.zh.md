@@ -27,7 +27,7 @@ showToc: true
 - `name()` —— 指标名称（必须与 `CustomTaskMetric` 匹配）
 - `description()` —— 人类可读的描述，在 UI 中显示
 - `aggregateTaskMetrics(long[] taskMetrics)` —— 由你决定如何将各任务的值合并为一个显示字符串。连接器在此拥有完全的控制权：你可以计算总和、平均值、百分位数或任何其他聚合方式。
-- 必须有一个**无参构造函数** —— Spark 在驱动端聚合时通过反射实例化它。
+- 必须有一个**无参构造函数** —— Spark 在 Driver 聚合时通过反射实例化它。
 
 **`CustomTaskMetric`** —— 由每个 `PartitionReader` 在 Executor 上报告：
 
@@ -102,18 +102,18 @@ public CustomTaskMetric[] currentMetricsValues() {
 
 4. **特殊指标名**：如果你的 `CustomTaskMetric` 使用 `"bytesWritten"` 或 `"recordsWritten"` 作为名称，Spark 还会将这些值传播到内部的 `TaskOutputMetrics`。这意味着它们不仅会出现在 SQL 标签页，还会出现在 Executors 标签页和阶段级 I/O 摘要中。
 
-### 驱动端自定义指标
+### Driver 自定义指标
 
-自定义指标不仅限于 Executor 端报告。你的 `Scan` 还可以从驱动端报告指标：
+自定义指标不仅限于 Executor 端报告。你的 `Scan` 还可以从 Driver 报告指标：
 
-- `Scan.reportDriverMetrics()` 从驱动端返回 `CustomTaskMetric[]` 数组
+- `Scan.reportDriverMetrics()` 从 Driver 返回 `CustomTaskMetric[]` 数组
 - `DataSourceV2ScanExecBase.postDriverMetrics()` 通过 `SQLMetrics.postDriverMetricUpdates()` 将它们发送到指标系统
 
-这对于"列出的文件数"、"裁剪的分区数"或"元数据缓存命中次数"等指标非常有用——这些事情发生在驱动端的规划阶段，而非 Executor 上的数据读取阶段。
+这对于"列出的文件数"、"裁剪的分区数"或"元数据缓存命中次数"等指标非常有用——这些事情发生在 Driver 的规划阶段，而非 Executor 上的数据读取阶段。
 
 ## UI 中的指标渲染
 
-指标在驱动端被收集和聚合后，需要被渲染。Spark UI 的 SQL 标签页已经有了显著的演进，理解渲染管道有助于你解读所看到的内容。
+指标在 Driver 被收集和聚合后，需要被渲染。Spark UI 的 SQL 标签页已经有了显著的演进，理解渲染管道有助于你解读所看到的内容。
 
 ### 计划可视化管道
 
@@ -272,7 +272,7 @@ metrics.foreach { case (accId, value) => println(s"$accId: $value") }
 
 这种方式对于集成测试中断言特定优化是否生效（例如"裁剪的文件数" > 0）或在 Notebook 中不切换 UI 即可检查性能非常有用。
 
-> **注意：** `spark.sharedState.statusStore` 是内部 API，仅在驱动端可用。在 Spark Connect 模式下，客户端无法访问 status store——请改用 REST API。
+> **注意：** `spark.sharedState.statusStore` 是内部 API，仅在 Driver 可用。在 Spark Connect 模式下，客户端无法访问 status store——请改用 REST API。
 
 ## 系列总结
 
@@ -280,7 +280,7 @@ metrics.foreach { case (accId, value) => println(s"$accId: $value") }
 
 - 在**[第一部分](/zh/posts/spark/understanding-sql-metrics/)**中，我们建立了基础：五种指标类型（`sum`、`size`、`timing`、`nanoTiming`、`average`）、`total (min, med, max)` 聚合格式，以及覆盖所有算子的 100+ 指标的完整参考。
 
-- 在**[第二部分](/zh/posts/spark/sql-metrics-part2-internals/)**中，我们追踪了内部生命周期——`AccumulatorV2` 值如何从 Executor 任务流向驱动端，`SQLAppStatusListener` 如何聚合它们，以及自适应查询执行（AQE）如何利用 Shuffle 统计信息（而非 SQL 指标）做出运行时决策，包括分区合并、倾斜 Join 优化和本地 Shuffle 读取。
+- 在**[第二部分](/zh/posts/spark/sql-metrics-part2-internals/)**中，我们追踪了内部生命周期——`AccumulatorV2` 值如何从 Executor 任务流向 Driver，`SQLAppStatusListener` 如何聚合它们，以及自适应查询执行（AQE）如何利用 Shuffle 统计信息（而非 SQL 指标）做出运行时决策，包括分区合并、倾斜 Join 优化和本地 Shuffle 读取。
 
 - 在**第三部分（本文）**中，我们介绍了扩展点：连接器开发者如何通过 DataSource V2 API 定义自定义指标，UI 如何通过 DOT/JSON/dagre-d3 管道渲染计划和指标，以及如何通过 REST API 和 Spark Listener 编程查询指标。
 

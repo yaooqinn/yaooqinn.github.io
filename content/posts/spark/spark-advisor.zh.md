@@ -60,9 +60,9 @@ Spark 性能的头号杀手。spark-advisor 获取任务指标分位数并比较
 
 当 Shuffle 字节数超过输入大小的 2 倍时检测到 Shuffle 密集型 Stage。Skill 会检查计划中的冗余 Exchange、错误的 Join 策略（本应用 BroadcastHashJoin 却用了 SortMergeJoin），以及不足的分区数。
 
-### 内存溢出
+### 内存 Spill
 
-任何非零的 `memoryBytesSpilled` 或 `diskBytesSpilled` 都会触发告警。溢出意味着 Executor 的聚合或排序缓冲区内存不足——这个问题在 UI 中几乎不可见，除非你知道在哪里看。
+任何非零的 `memoryBytesSpilled` 或 `diskBytesSpilled` 都会触发告警。Spill 意味着 Executor 的聚合或排序缓冲区内存不足——这个问题在 UI 中几乎不可见，除非你知道在哪里看。
 
 ### 掉队任务
 
