@@ -41,6 +41,8 @@ catalog_sales (fact table, 3.3B rows)
 
 Every number in this post is real. Let's walk through the metrics, operator by operator, and see what they tell us.
 
+![TPC-DS q99 Plan Overview](/images/sql-metrics/q99-plan-overview.png)
+
 ## Section 1: The Fact Table Scan — 3.3 Billion Rows
 
 The first operator in the plan is `ScanTransformer catalog_sales`. This is where everything starts, and the metrics here tell a rich story.

@@ -41,6 +41,8 @@ catalog_sales（事实表，33 亿行）
 
 本文中所有数字均为真实数据。让我们逐算子走读指标，看看它们告诉了我们什么。
 
+![TPC-DS q99 执行计划概览](/images/sql-metrics/q99-plan-overview.png)
+
 ## 第一节：事实表扫描 — 33 亿行
 
 计划中的第一个算子是 `ScanTransformer catalog_sales`。一切从这里开始，这里的指标讲述了一个精彩的故事。
