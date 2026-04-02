@@ -100,16 +100,18 @@ peakMemoryBytes[] — 每个算子的峰值内存
 
 在原生 Spark 中，大多数算子仅报告 `numOutputRows`。在 Gluten 中，**每个算子**都拥有以下指标：
 
-| 指标 | 类型 | 测量内容 |
-|-----|------|---------|
-| `wallNanos` | nsTiming | 每算子的墙钟时间 |
-| `cpuCount` | timing | CPU 时间计数 |
-| `peakMemoryBytes` | size | 峰值内存使用 |
-| `numMemoryAllocations` | sum | 内存分配次数 |
-| `outputRows` | sum | 输出行数 |
-| `outputVectors` | sum | 输出向量（批次）数 |
-| `outputBytes` | size | 列式格式的输出数据量 |
-| `loadLazyVectorTime` | timing | 加载惰性求值向量的时间 |
+| 指标 | 显示名称 | 类型 | 测量内容 |
+|-----|---------|------|---------|
+| `wallNanos` | time of *{算子}* | nsTiming | 每算子的墙钟时间 |
+| `cpuCount` | cpu wall time count | sum | `getOutput()` 调用次数（批次数） |
+| `peakMemoryBytes` | peak memory bytes | size | 峰值内存使用 |
+| `numMemoryAllocations` | number of memory allocations | sum | 内存分配次数 |
+| `outputRows` | number of output rows | sum | 输出行数 |
+| `outputVectors` | number of output vectors | sum | 输出向量（批次）数 |
+| `outputBytes` | number of output bytes | size | 列式格式的输出数据量 |
+| `loadLazyVectorTime` | time to load lazy vectors | timing | 加载惰性求值向量的时间 |
+
+注意：`wallNanos` 使用算子特定的显示名称——"time of filter"、"time of sort"、"time of scan and filter"、"time of project" 等。
 
 在每个算子上都有 `wallNanos` 使得识别原生执行中的瓶颈算子变得直观。
 
@@ -154,17 +156,17 @@ struct CpuWallTiming {
 
 原生 Spark 的扫描算子有 `scanTime` 和 `numFiles`。Gluten 深入得多：
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `skippedSplits` / `processedSplits` | 文件分片裁剪效果 |
-| `skippedStrides` / `processedStrides` | 文件内行组/条带级裁剪 |
-| `ioWaitTime` | I/O 操作的等待时间 |
-| `storageReadBytes` | 从远程存储读取的字节数 |
-| `localReadBytes` | 从本地 SSD 缓存读取的字节数 |
-| `ramReadBytes` | 从内存缓存读取的字节数 |
-| `preloadSplits` | 预加载的分片数（预取） |
-| `dataSourceAddSplitTime` | 管理分片分配的时间 |
-| `dataSourceReadTime` | 从数据源读取数据的时间 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `skippedSplits` / `processedSplits` | number of skipped/processed splits | 文件分片裁剪效果 |
+| `skippedStrides` / `processedStrides` | number of skipped/processed row groups | 文件内行组/条带级裁剪 |
+| `ioWaitTime` | io wait time | I/O 操作的等待时间 |
+| `storageReadBytes` | storage read bytes | 从远程存储读取的字节数 |
+| `localReadBytes` | local ssd read bytes | 从本地 SSD 缓存读取的字节数 |
+| `ramReadBytes` | ram read bytes | 从内存缓存读取的字节数 |
+| `preloadSplits` | number of preloaded splits | 预加载的分片数（预取） |
+| `dataSourceAddSplitTime` | data source add split time | 管理分片分配的时间 |
+| `dataSourceReadTime` | data source read time | 从数据源读取数据的时间 |
 
 `storageReadBytes` / `localReadBytes` / `ramReadBytes` 的分解在云环境中尤其有价值。如果大部分读取来自 `storageReadBytes`，说明缓存还没热起来。如果 `ioWaitTime` 在 `wallNanos` 中占主导地位，瓶颈是网络 I/O 而非 CPU。
 
@@ -172,12 +174,12 @@ struct CpuWallTiming {
 
 原生 Spark 在阶段级别追踪溢出。Gluten 在每算子、每阶段级别追踪：
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `spilledBytes` | 溢出到磁盘的数据量 |
-| `spilledRows` | 溢出的行数 |
-| `spilledPartitions` | 涉及溢出的分区数 |
-| `spilledFiles` | 创建的溢出文件数 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `spilledBytes` | bytes written for spilling | 溢出到磁盘的数据量 |
+| `spilledRows` | total rows written for spilling | 溢出的行数 |
+| `spilledPartitions` | total spilled partitions | 涉及溢出的分区数 |
+| `spilledFiles` | total spilled files | 创建的溢出文件数 |
 
 对于 Join 算子，溢出在构建阶段和探测阶段分别追踪（见下一节），因此你可以精确定位哪个阶段正面临内存压力。
 
@@ -185,11 +187,11 @@ struct CpuWallTiming {
 
 动态过滤器（也称运行时过滤器）由 Join 算子生成，用于在运行时裁剪扫描结果。原生 Spark 没有相关指标。Gluten 追踪了完整的生命周期：
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `numDynamicFiltersProduced` | Join 构建端生成的运行时过滤器数 |
-| `numDynamicFiltersAccepted` | 被扫描算子应用的运行时过滤器数 |
-| `numReplacedWithDynamicFilterRows` | 被运行时过滤器消除的行数 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `numDynamicFiltersProduced` | number of dynamic filters produced | Join 构建端生成的运行时过滤器数 |
+| `numDynamicFiltersAccepted` | number of dynamic filters accepted | 被扫描算子应用的运行时过滤器数 |
+| `numReplacedWithDynamicFilterRows` | number of replaced with dynamic filter rows | 被运行时过滤器消除的行数 |
 
 如果 `numDynamicFiltersProduced` > 0 但 `numDynamicFiltersAccepted` = 0，说明过滤器已生成但未被应用——这表明扫描和 Join 之间的连接方式与优化器的预期不符。如果 `numReplacedWithDynamicFilterRows` 是一个很大的数字，说明运行时过滤器节省了大量工作。
 
@@ -199,29 +201,29 @@ struct CpuWallTiming {
 
 **构建阶段：**
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `hashBuildInputRows` | 构建端消费的行数 |
-| `hashBuildOutputRows` | 哈希表中的行数 |
-| `hashBuildWallNanos` | 构建阶段的墙钟时间 |
-| `hashBuildPeakMemoryBytes` | 构建阶段的峰值内存 |
-| `hashBuildSpilledBytes` | 构建阶段溢出的数据量 |
-| `hashBuildSpilledRows` | 构建阶段溢出的行数 |
-| `hashBuildSpilledPartitions` | 构建阶段溢出的分区数 |
-| `hashBuildSpilledFiles` | 构建阶段创建的溢出文件数 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `hashBuildInputRows` | number of hash build input rows | 构建端消费的行数 |
+| `hashBuildOutputRows` | number of hash build output rows | 哈希表中的行数 |
+| `hashBuildWallNanos` | time of hash build | 构建阶段的墙钟时间 |
+| `hashBuildPeakMemoryBytes` | hash build peak memory bytes | 构建阶段的峰值内存 |
+| `hashBuildSpilledBytes` | hash build spilled bytes | 构建阶段溢出的数据量 |
+| `hashBuildSpilledRows` | hash build spilled rows | 构建阶段溢出的行数 |
+| `hashBuildSpilledPartitions` | hash build spilled partitions | 构建阶段溢出的分区数 |
+| `hashBuildSpilledFiles` | hash build spilled files | 构建阶段创建的溢出文件数 |
 
 **探测阶段：**
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `hashProbeInputRows` | 探测端消费的行数 |
-| `hashProbeOutputRows` | 探测后输出的行数 |
-| `hashProbeWallNanos` | 探测阶段的墙钟时间 |
-| `hashProbePeakMemoryBytes` | 探测阶段的峰值内存 |
-| `hashProbeSpilledBytes` | 探测阶段溢出的数据量 |
-| `hashProbeSpilledRows` | 探测阶段溢出的行数 |
-| `hashProbeSpilledPartitions` | 探测阶段溢出的分区数 |
-| `hashProbeSpilledFiles` | 探测阶段创建的溢出文件数 |
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `hashProbeInputRows` | number of hash probe input rows | 探测端消费的行数 |
+| `hashProbeOutputRows` | number of hash probe output rows | 探测后输出的行数 |
+| `hashProbeWallNanos` | time of hash probe | 探测阶段的墙钟时间 |
+| `hashProbePeakMemoryBytes` | hash probe peak memory bytes | 探测阶段的峰值内存 |
+| `hashProbeSpilledBytes` | hash probe spilled bytes | 探测阶段溢出的数据量 |
+| `hashProbeSpilledRows` | hash probe spilled rows | 探测阶段溢出的行数 |
+| `hashProbeSpilledPartitions` | hash probe spilled partitions | 探测阶段溢出的分区数 |
+| `hashProbeSpilledFiles` | hash probe spilled files | 探测阶段创建的溢出文件数 |
 
 **前置/后置投影：**
 
@@ -234,13 +236,11 @@ struct CpuWallTiming {
 
 ### 写入指标
 
-| 指标 | 测量内容 |
-|-----|---------|
-| `physicalWrittenBytes` | 实际写入存储的字节数 |
-| `writeIOTime` | 写入过程中的 I/O 时间 |
-| `numWrittenFiles` | 产生的文件数 |
-
-## Gluten vs 原生 Spark vs DataFlint
+| 指标 | 显示名称 | 测量内容 |
+|-----|---------|---------|
+| `physicalWrittenBytes` | number of written bytes | 实际写入存储的字节数 |
+| `writeIOTime` / `writeIONanos` | time of write IO | 写入过程中的 I/O 时间 |
+| `numWrittenFiles` | number of written files | 产生的文件数 |
 
 ## 在 Spark UI 中阅读 Gluten 指标
 
