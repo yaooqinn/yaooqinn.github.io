@@ -4,6 +4,7 @@ date: 2026-05-25
 tags: ["spark", "query-optimizer", "llm", "join-order", "performance"]
 categories: ["Apache Spark"]
 summary: "Databricks and UPenn put an LLM agent to work as an offline join-order tuner and got P90 latency down 41% / geomean 1.288× speedup on JOB's 113 queries — beating even perfect cardinality estimates. From the trenches of an open-source query engine, here is what that result does and does not prove."
+cover: /images/posts/llm-join-order-cover.png
 showToc: true
 ---
 

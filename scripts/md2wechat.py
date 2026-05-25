@@ -170,13 +170,24 @@ def build_footer(urls: list[str]) -> str:
     )
 
 
-def wrap_document(title: str, body: str) -> str:
+def wrap_document(title: str, body: str, cover: str = "") -> str:
+    title_block = (
+        f'<h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;'
+        f'line-height:1.4;margin:0 0 16px 0;padding:0;">{title}</h1>\n'
+    )
+    cover_block = ""
+    if cover:
+        cover_block = (
+            f'<img src="{cover}" alt="cover" '
+            f'style="width:100%;max-width:100%;border-radius:8px;'
+            f'margin:0 0 20px 0;display:block;"/>\n'
+        )
     return (
         '<!doctype html>\n<html lang="zh-cn">\n<head>\n<meta charset="utf-8"/>\n'
         f"<title>{title}</title>\n</head>\n"
         '<body style="max-width:677px;margin:0 auto;padding:20px;'
         'font-family:-apple-system,BlinkMacSystemFont,\'Helvetica Neue\',sans-serif;">\n'
-        f"{body}\n</body>\n</html>\n"
+        f"{title_block}{cover_block}{body}\n</body>\n</html>\n"
     )
 
 
@@ -184,6 +195,9 @@ def convert(src: Path, theme_name: str = "green") -> tuple[str, dict]:
     raw = src.read_text(encoding="utf-8")
     body_md, meta = strip_front_matter(raw)
     title = meta.get("title", src.stem)
+    cover = meta.get("cover", "")
+    if cover.startswith("/"):
+        cover = SITE_BASE + cover
 
     html_core = markdown.markdown(
         body_md,
@@ -195,11 +209,12 @@ def convert(src: Path, theme_name: str = "green") -> tuple[str, dict]:
     html_core = apply_inline_styles(html_core, THEMES[theme_name])
     html_core += build_footer(urls)
 
-    return wrap_document(title, html_core), {
+    return wrap_document(title, html_core, cover), {
         "title": title,
         "links_count": len(urls),
         "theme": theme_name,
         "slug": src.stem.removesuffix(".zh"),
+        "cover": cover,
     }
 
 
