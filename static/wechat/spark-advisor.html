@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>spark-advisor：AI 驱动的 Spark 性能工程师</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">每个 Spark 工程师都经历过这种场景：昨天还好好运行的作业，今天突然慢了 3 倍。有人问"这个查询为什么慢？"，然后你花了一个小时在 Spark History Server UI 上点来点去，用肉眼对比各个标签页的数字，在脑中 diff 配置。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果你的 AI 助手能帮你做这些呢？</p>
+<h2 id="spark-advisor">什么是 spark-advisor？</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">spark-advisor</strong> 是一个 Agent Skill，将你的 AI 编程助手变成 Spark 性能工程师。它支持 GitHub Copilot、Claude Code、Cursor 等 30 多种 Agent。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">当你说 <em style="font-style:italic;color:#576b95;">"为什么我的 Spark 应用很慢？"</em> 或 <em style="font-style:italic;color:#576b95;">"对比这两次 TPC-DS 跑测"</em>，Agent 会：</p>
+<ol style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark-history-cli</code> 连接你的 Spark History Server</li>
+<li style="margin:8px 0;line-height:1.8;">收集结构化 JSON 数据（概览、Stage、Executor、SQL 计划）</li>
+<li style="margin:8px 0;line-height:1.8;">应用诊断规则找到瓶颈</li>
+<li style="margin:8px 0;line-height:1.8;">生成优先级排序的报告和可操作的建议</li>
+</ol>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">无需手动点击，无需切换上下文。只需开口问。</p>
+<h2 id="_1">快速开始</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">安装 CLI 和 Skill：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">pip install spark-history-cli
+npx skills add yaooqinn/spark-history-cli
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">然后告诉你的 Agent：</p>
+<blockquote style="border-left:4px solid #07c160;background:#e8f7ef;padding:12px 15px;margin:15px 0;border-radius:0 8px 8px 0;color:#666;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">"诊断一下 History Server 上最新的 Spark 应用"</p>
+</blockquote>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">就这么简单。Agent 会列出应用、选择最新的、收集指标、分析它们，然后告诉你问题在哪。</p>
+<h2 id="_2">它能诊断什么</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这个 Skill 将经验丰富的 Spark 工程师的诊断直觉编码为结构化规则。以下是它检查的内容：</p>
+<h3 id="_3">任务倾斜</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark 性能的头号杀手。spark-advisor 获取任务指标分位数并比较 p50 和 p95：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">p95/p50 &gt; 3x</strong> → 中度倾斜</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">p95/p50 &gt; 10x</strong> → 严重倾斜</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">然后根据根因推荐：AQE 倾斜 Join、分区数调优或 Key 加盐。</p>
+<h3 id="gc">GC 压力</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">当 GC 时间超过 Executor 总运行时间的 10% 时标记警告，20% 以上标记严重。建议从增加 Executor 内存到减少单 Executor 并发度不等。</p>
+<h3 id="shuffle">Shuffle 开销</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">当 Shuffle 字节数超过输入大小的 2 倍时检测到 Shuffle 密集型 Stage。Skill 会检查计划中的冗余 Exchange、错误的 Join 策略（本应用 BroadcastHashJoin 却用了 SortMergeJoin），以及不足的分区数。</p>
+<h3 id="spill">内存 Spill</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">任何非零的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">memoryBytesSpilled</code> 或 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">diskBytesSpilled</code> 都会触发告警。Spill 意味着 Executor 的聚合或排序缓冲区内存不足——这个问题在 UI 中几乎不可见，除非你知道在哪里看。</p>
+<h3 id="_4">掉队任务</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Stage 中耗时超过中位数 5 倍以上的任务。spark-advisor 会检查掉队者是否集中在特定 Executor（硬件问题）还是处理了更多数据（倾斜变体）。</p>
+<h3 id="glutenvelox">Gluten/Velox 感知</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对于 Gluten 加速的 Spark 应用，Skill 能检测：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">回退算子</strong>：最终计划中的非 Transformer 节点（如 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortMergeJoin</code> 而非 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ShuffledHashJoinExecTransformer</code>）</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">列式转行式边界</strong>：<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">VeloxColumnarToRow</code> 转换表示回退</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">原生指标模式</strong>：Gluten Stage 与原生 Spark Stage 不同的 GC 和内存特征</li>
+</ul>
+<h2 id="tpc-ds">TPC-DS 基准对比</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">spark-advisor 最强大的功能之一是结构化基准对比。比如说：</p>
+<blockquote style="border-left:4px solid #07c160;background:#e8f7ef;padding:12px 15px;margin:15px 0;border-radius:0 8px 8px 0;color:#666;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">"对比这两次 TPC-DS 跑测：app-20260315120000-0001 和 app-20260320120000-0001"</p>
+</blockquote>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Agent 会：</p>
+<ol style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">跨两次运行匹配查询（q1–q99，处理 q14a/b、q23a/b 等拆分查询）</li>
+<li style="margin:8px 0;line-height:1.8;">计算每个查询的加速比和回退比</li>
+<li style="margin:8px 0;line-height:1.8;">生成对比表：</li>
+</ol>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">| 查询 | 基线   | 候选   | 差值  | 加速比 | 状态        |
+|------|--------|--------|-------|--------|-------------|
+| q67  | 72s    | 85s    | +13s  | 0.85x  | ⚠ 回退      |
+| q1   | 61s    | 45s    | -16s  | 1.36x  | ✓ 提升      |
+| q50  | 34s    | 33s    | -1s   | 1.03x  | ≈ 持平      |
+</code></pre>
+<ol start="4">
+<li style="margin:8px 0;line-height:1.8;">深入分析 Top-3 回退查询——对比最终计划、Stage 指标和配置差异</li>
+<li style="margin:8px 0;line-height:1.8;">报告总体加速比（所有查询的几何平均值）</li>
+</ol>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这替代了每次跑完基准后数小时的手工表格工作。</p>
+<h2 id="_5">诊断报告</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">spark-advisor 生成结构化的 Markdown 报告：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;"># Spark 性能报告
+
+## 摘要
+应用 65% 的时间花在 3 个 Shuffle 密集型 Stage 上。
+GC 压力中等（占 Executor 时间的 12%）。
+Stage 14 检测到任务倾斜（p95/p50 = 8.2x）。
+
+## 发现
+### 发现 1：Stage 14 严重任务倾斜
+- **严重程度**：高
+- **证据**：p95 耗时 45s vs p50 5.5s（8.2x 比率）
+- **建议**：启用 AQE 倾斜 Join 优化
+
+### 发现 2：Executor 3、7 GC 压力
+- **严重程度**：中
+- **证据**：18% GC 时间（阈值：10%）
+- **建议**：将 spark.executor.memory 从 4g 增加到 8g
+
+## 建议
+1. 启用 spark.sql.adaptive.skewJoin.enabled=true
+2. 增加 Executor 内存到 8g
+3. 审查 Stage 14 的 Join 策略——考虑 Broadcast Join
+</code></pre>
+<h2 id="_6">底层原理</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">spark-advisor 是一个纯 SKILL.md——没有代码，只有结构化的指令，教会 Agent 如何成为 Spark 性能工程师。它使用：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">spark-history-cli</strong> 收集所有数据（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">--json</code> 模式获取结构化输出）</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">references/diagnostics.md</code> 中的<strong style="color:#07c160;font-weight:bold;">诊断规则</strong>，包含具体阈值和启发式方法</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">references/comparison.md</code> 中的<strong style="color:#07c160;font-weight:bold;">对比方法论</strong>，用于 TPC-DS 基准测试</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">sample_codes/</code> 中的<strong style="color:#07c160;font-weight:bold;">示例脚本</strong>，用于常见模式</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Agent 读取这些参考文件，将规则应用到你的数据上，并对结果进行推理。无需模型微调，无需训练数据——只需要结构良好的领域知识。</p>
+<h2 id="_7">安装</h2>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;"># 安装 CLI
+pip install spark-history-cli
+
+# 为你的 Agent 安装 Skill
+npx skills add yaooqinn/spark-history-cli
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这会安装两个 Skill：
+- <strong style="color:#07c160;font-weight:bold;">spark-history-cli</strong> — 查询 Spark History Server
+- <strong style="color:#07c160;font-weight:bold;">spark-advisor</strong> — 诊断、对比和优化</p>
+<h2 id="_8">未来计划</h2>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">自动修复</strong>：建议可直接应用的配置补丁</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">历史趋势</strong>：跨版本追踪性能变化</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">可视化</strong>：生成 SVG 火焰图和 DAG 标注</li>
+</ul>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">spark-advisor 在 github.com/yaooqinn/spark-history-cli<sup>[1]</sup> 开源。如果觉得有用，欢迎 Star。</em></p>
+<section style="margin-top:30px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#999;">
+  <p style="font-weight:bold;color:#666;">参考链接</p>
+  <p style="margin:6px 0;word-break:break-all;">[1] https://github.com/yaooqinn/spark-history-cli</p>
+</section>
+
+</body>
+</html>

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>深入 Spark SQL Metrics（第三部分）：扩展 API、UI 渲染与 REST API</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是 Spark SQL Metrics 深度解析的三部曲：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">第一部分：指标类型、完整参考和含义</li>
+<li style="margin:8px 0;line-height:1.8;">第二部分：内部实现机制，以及 AQE 如何利用指标做出运行时决策</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">第三部分（本文）</strong>：扩展 API、UI 渲染和 REST API</li>
+<li style="margin:8px 0;line-height:1.8;">第四部分：Gluten 如何扩展指标系统</li>
+</ul>
+<h2 id="datasource-v2-custommetric-api">DataSource V2 CustomMetric API</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在第一部分和第二部分中，我们探索了 Spark 内置指标及其内部机制。但如果你正在构建自定义连接器，需要暴露连接器特有的数据——例如从专有格式读取的字节数、缓存命中率或限流次数，该怎么办？从 Spark 3.2 开始，DataSource V2 API 提供了一个干净的扩展点来满足这一需求。</p>
+<h3 id="_1">接口层次结构</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">核心是 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">org.apache.spark.sql.connector.metric</code> 包中的两个接口：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetric</code></strong> —— 在连接器中定义一次，描述<em style="font-style:italic;color:#576b95;">指标是什么</em>：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">name()</code> —— 指标名称（必须与 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomTaskMetric</code> 匹配）</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">description()</code> —— 人类可读的描述，在 UI 中显示</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">aggregateTaskMetrics(long[] taskMetrics)</code> —— 由你决定如何将各任务的值合并为一个显示字符串。连接器在此拥有完全的控制权：你可以计算总和、平均值、百分位数或任何其他聚合方式。</li>
+<li style="margin:8px 0;line-height:1.8;">必须有一个<strong style="color:#07c160;font-weight:bold;">无参构造函数</strong> —— Spark 在 Driver 聚合时通过反射实例化它。</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomTaskMetric</code></strong> —— 由每个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">PartitionReader</code> 在 Executor 上报告：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">name()</code> —— 必须与对应 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetric.name()</code> 匹配</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">value()</code> —— 返回一个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">long</code>，表示该任务的当前指标值</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark 提供了两个便利的基类，让你无需从头实现 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">aggregateTaskMetrics</code>：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">聚合逻辑</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">输出格式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomSumMetric</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">求所有任务值的和</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">String.valueOf(sum)</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomAvgMetric</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">计算任务值的平均值</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DecimalFormat("#0.000").format(avg)</code></td>
+</tr></tbody>
+</table>
+<h3 id="_2">如何实现自定义指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">第一步：定义指标类。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">继承内置基类或直接实现 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetric</code> 接口：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">public class MyBytesReadMetric extends CustomSumMetric {
+    @Override
+    public String name() { return &quot;myBytesRead&quot;; }
+
+    @Override
+    public String description() { return &quot;bytes read from my source&quot;; }
+}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">第二步：在 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Scan</code> 中注册指标。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">你的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Scan</code> 实现告诉 Spark 连接器支持哪些自定义指标：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">@Override
+public CustomMetric[] supportedCustomMetrics() {
+    return new CustomMetric[] { new MyBytesReadMetric() };
+}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">第三步：在 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">PartitionReader</code> 中报告值。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">每个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">PartitionReader</code> 在 Spark 调用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">currentMetricsValues()</code> 时报告当前指标值。此方法每处理 100 行（由 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetrics.NUM_ROWS_PER_UPDATE</code> 控制）调用一次，以及在任务完成时调用：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">@Override
+public CustomTaskMetric[] currentMetricsValues() {
+    return new CustomTaskMetric[] {
+        new CustomTaskMetric() {
+            @Override public String name() { return &quot;myBytesRead&quot;; }
+            @Override public long value() { return bytesReadSoFar; }
+        }
+    };
+}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">就是这样——你的自定义指标现在将在 Spark UI 中与内置指标一起显示。</p>
+<h3 id="_3">写入端自定义指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">自定义指标不仅限于读取。写入连接器也可以通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">BatchWrite.supportedCustomMetrics()</code> 定义自定义指标，值通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataWriter.currentMetricsValues()</code> 报告。这对于压缩率、刷新次数或写入路径上的批处理统计等指标非常有用。</p>
+<h3 id="spark">Spark 内部如何处理自定义指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在幕后，多个组件协同工作，使自定义指标通过与内置指标相同的管道流转：</p>
+<ol style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">注册</strong>：<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceV2ScanExecBase</code> 在规划阶段调用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">scan.supportedCustomMetrics()</code> 并通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetrics.createV2CustomMetric()</code> 创建 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 包装器。每个包装器都有一个特殊的类型字符串。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">类型编码</strong>：指标类型存储为 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">"v2Custom_&lt;完整类名&gt;"</code> —— 例如 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">"v2Custom_com.mycompany.MyBytesReadMetric"</code>。这个编码由 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetrics.buildV2CustomMetricTypeName()</code> 构造。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">聚合</strong>：当 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLAppStatusListener</code> 在聚合时接收到任务指标时，它解析 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">v2Custom_</code> 前缀，提取类名，通过反射加载类，并调用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">aggregateTaskMetrics(long[])</code>。这就是为什么需要无参构造函数。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">特殊指标名</strong>：如果你的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomTaskMetric</code> 使用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">"bytesWritten"</code> 或 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">"recordsWritten"</code> 作为名称，Spark 还会将这些值传播到内部的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">TaskOutputMetrics</code>。这意味着它们不仅会出现在 SQL 标签页，还会出现在 Executors 标签页和阶段级 I/O 摘要中。</p>
+</li>
+</ol>
+<h3 id="driver">Driver 自定义指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">自定义指标不仅限于 Executor 端报告。你的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Scan</code> 还可以从 Driver 报告指标：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Scan.reportDriverMetrics()</code> 从 Driver 返回 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomTaskMetric[]</code> 数组</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceV2ScanExecBase.postDriverMetrics()</code> 通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetrics.postDriverMetricUpdates()</code> 将它们发送到指标系统</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这对于"列出的文件数"、"裁剪的分区数"或"元数据缓存命中次数"等指标非常有用——这些事情发生在 Driver 的规划阶段，而非 Executor 上的数据读取阶段。</p>
+<h2 id="ui">UI 中的指标渲染</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">指标在 Driver 被收集和聚合后，需要被渲染。Spark UI 的 SQL 标签页已经有了显著的演进，理解渲染管道有助于你解读所看到的内容。</p>
+<h3 id="_4">计划可视化管道</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">从存储的指标到视觉渲染的路径如下：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">SQLAppStatusStore.executionMetrics(id)
+    → Map[accumulatorId → formatted String]
+
+ExecutionPage.planVisualization()
+    → graph.makeDotFile(metrics)        # 紧凑的 DOT 标签
+    → graph.makeNodeDetailsJson(metrics) # 完整指标 JSON
+
+spark-sql-viz.js
+    → renderPlanViz()                    # dagre-d3 图形
+    → getNodeDetails()                   # 解析 JSON
+    → updateDetailsPanel()              # 点击后的侧边面板
+    → rerenderWithDetailedLabels()       # 可选的内联模式
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">服务端准备两种表示：用于图形布局的 <strong style="color:#07c160;font-weight:bold;">DOT 文件</strong>（使用紧凑的节点标签）和包含完整指标详情的 <strong style="color:#07c160;font-weight:bold;">JSON 数据</strong>。JavaScript 前端使用 dagre-d3 渲染 DAG 并提供交互式指标探索。</p>
+<h3 id="_5">紧凑模式与详细模式</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SQL 计划可视化支持两种显示模式：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">紧凑模式</strong>（自 SPARK-55785 起默认）：节点标签仅显示算子名称。点击节点可打开侧边面板，查看完整的指标表。即使对于包含数十个算子的复杂计划，图形也保持可读性。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">详细模式</strong>（通过复选框切换）：指标以 10px 字号内联渲染在图形节点内。当你需要一个包含所有数字的完整计划的可打印快照时很有用，但对于指标较多的算子可能会使图形变得很宽。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">阶段/任务切换</strong>：启用后，会在最大值旁添加 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">(stage X: task Y)</code> 标注，帮助你定位产生极端值的具体任务——这对调试数据倾斜非常有价值。</p>
+</li>
+</ul>
+<h3 id="_6">侧边面板</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在紧凑模式下点击节点时，侧边面板显示：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">清晰的表格布局中的<strong style="color:#07c160;font-weight:bold;">指标名称 + 格式化后的值</strong></li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">WholeStageCodegen 集群</strong>：点击集群节点会显示所有子算子的指标分组，让你看到单个代码生成单元内发生的全貌</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">搜索过滤器</strong>：对于指标众多的计划，文本过滤器帮助你快速找到关心的指标</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">描述提示信息</strong>：将鼠标悬停在面板标题中的算子名称上可看到提示信息，当计划中出现多个相同类型的算子时有助于区分</li>
+</ul>
+<h2 id="rest-api">REST API</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark UI 非常适合可视化探索，但对于自动化——监控仪表板、性能回归测试或事后分析脚本——你需要编程访问。</p>
+<h3 id="_7">端点</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SQL 执行指标的主要端点是：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">GET /api/v1/applications/{appId}/sql/{executionId}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">查询参数：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">参数</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">默认值</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">描述</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">details</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">true</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">包含节点级详情和指标</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">planDescription</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">true</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">包含物理计划文本</td>
+</tr></tbody>
+</table>
+<h3 id="_8">响应结构</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">典型的响应如下：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">{
+  &quot;id&quot;: 0,
+  &quot;status&quot;: &quot;COMPLETED&quot;,
+  &quot;description&quot;: &quot;count at ...&quot;,
+  &quot;planDescription&quot;: &quot;*(1) HashAggregate ...&quot;,
+  &quot;submissionTime&quot;: &quot;2026-04-01T12:00:00Z&quot;,
+  &quot;duration&quot;: 5432,
+  &quot;runningJobIds&quot;: [],
+  &quot;successJobIds&quot;: [0, 1],
+  &quot;failedJobIds&quot;: [],
+  &quot;nodes&quot;: [
+    {
+      &quot;nodeId&quot;: 0,
+      &quot;nodeName&quot;: &quot;HashAggregate&quot;,
+      &quot;wholeStageCodegenId&quot;: 1,
+      &quot;metrics&quot;: [
+        {&quot;name&quot;: &quot;number of output rows&quot;, &quot;value&quot;: &quot;5,000&quot;},
+        {&quot;name&quot;: &quot;peak memory&quot;, &quot;value&quot;: &quot;total (min, med, max)\n512.0 MiB (128.0 MiB, 128.0 MiB, 128.0 MiB)&quot;},
+        {&quot;name&quot;: &quot;spill size&quot;, &quot;value&quot;: &quot;0.0 B&quot;}
+      ]
+    }
+  ],
+  &quot;edges&quot;: [
+    {&quot;fromId&quot;: 1, &quot;toId&quot;: 0}
+  ]
+}
+</code></pre>
+<h3 id="_9">关键要点</h3>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Metric</code> 仅仅是 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">{name: String, value: String}</code></strong> —— REST API 返回的是格式化后的显示字符串，而非原始数值或指标类型。如果你需要对指标值做算术运算，必须自行解析格式化字符串。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wholeStageCodegenId</code></strong> 表示算子所属的代码生成集群。具有相同 ID 的算子被融合到同一个生成的 Java 类中。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">edges</code></strong> 以父→子算子关系定义 DAG 结构。结合 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">nodeId</code> 值，你可以编程重建完整的计划树。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">列表端点</strong>：获取应用程序的所有 SQL 执行：
+  <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">GET /api/v1/applications/{appId}/sql?offset=0&amp;length=100</code>
+  通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">offset</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">length</code> 参数支持分页。</p>
+</li>
+</ul>
+<h3 id="spark-history-cli">通过 spark-history-cli 访问</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对于交互式探索，<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark-history-cli</code> 封装了 REST API，提供便捷的命令：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;"># 结构化 JSON 输出
+spark-history-cli --json -a &lt;app&gt; sql          # 列出所有 SQL 执行
+spark-history-cli --json -a &lt;app&gt; sql &lt;id&gt;     # 单次执行及其指标
+
+# 计划文本
+spark-history-cli -a &lt;app&gt; sql-plan &lt;id&gt;           # 完整计划
+spark-history-cli -a &lt;app&gt; sql-plan &lt;id&gt; --view final  # AQE 后的最终计划
+</code></pre>
+<h2 id="_10">实用示例</h2>
+<h3 id="spark-listener">使用 Spark Listener 编程捕获指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果你想实时响应指标——例如记录慢查询或触发告警——可以注册一个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">QueryExecutionListener</code>：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">spark.listenerManager.register(new QueryExecutionListener {
+  override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
+    val metrics = qe.executedPlan.collectLeaves().flatMap(_.metrics)
+    metrics.foreach { case (name, metric) =&gt;
+      println(s&quot;$name: ${metric.value}&quot;)
+    }
+  }
+
+  override def onFailure(funcName: String, qe: QueryExecution, exception: Exception): Unit = {}
+})
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这个监听器在每次成功的查询执行后触发，让你可以访问已执行的物理计划，遍历算子并以<strong style="color:#07c160;font-weight:bold;">原始 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Long</code> 值</strong>直接读取指标——这是获取未经显示格式化和四舍五入的指标值的唯一方式。</p>
+<h3 id="dataframe">从 DataFrame 执行中访问指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对于临时调试或 REPL 交互式探索，你可以在执行查询后通过状态存储访问指标：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">val df = spark.sql(&quot;SELECT count(*) FROM my_table&quot;)
+df.collect()
+
+// 访问最近一次执行的指标
+val lastExec = spark.sharedState.statusStore.executionsList().last
+val metrics = spark.sharedState.statusStore.executionMetrics(lastExec.executionId)
+metrics.foreach { case (accId, value) =&gt; println(s&quot;$accId: $value&quot;) }
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这种方式对于集成测试中断言特定优化是否生效（例如"裁剪的文件数" &gt; 0）或在 Notebook 中不切换 UI 即可检查性能非常有用。</p>
+<blockquote style="border-left:4px solid #07c160;background:#e8f7ef;padding:12px 15px;margin:15px 0;border-radius:0 8px 8px 0;color:#666;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">注意：</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark.sharedState.statusStore</code> 是内部 API，仅在 Driver 可用。在 Spark Connect 模式下，客户端无法访问 status store——请改用 REST API。</p>
+</blockquote>
+<h2 id="_11">系列总结</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">本文是 Spark SQL Metrics 三部曲深度解析的最终篇：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在<strong style="color:#07c160;font-weight:bold;">第一部分</strong>中，我们建立了基础：五种指标类型（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">sum</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">size</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">timing</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">nanoTiming</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">average</code>）、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">total (min, med, max)</code> 聚合格式，以及覆盖所有算子的 100+ 指标的完整参考。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在<strong style="color:#07c160;font-weight:bold;">第二部分</strong>中，我们追踪了内部生命周期——<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">AccumulatorV2</code> 值如何从 Executor 任务流向 Driver，<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLAppStatusListener</code> 如何聚合它们，以及自适应查询执行（AQE）如何利用 Shuffle 统计信息（而非 SQL 指标）做出运行时决策，包括分区合并、倾斜 Join 优化和本地 Shuffle 读取。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在<strong style="color:#07c160;font-weight:bold;">第三部分（本文）</strong>中，我们介绍了扩展点：连接器开发者如何通过 DataSource V2 API 定义自定义指标，UI 如何通过 DOT/JSON/dagre-d3 管道渲染计划和指标，以及如何通过 REST API 和 Spark Listener 编程查询指标。</p>
+</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这三个视角——<strong style="color:#07c160;font-weight:bold;">指标测量什么</strong>、<strong style="color:#07c160;font-weight:bold;">内部如何工作</strong>、<strong style="color:#07c160;font-weight:bold;">如何扩展和访问它们</strong>——共同构成了有效使用 SQL 指标进行性能调试、监控和连接器开发所需的完整知识体系。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">在第一部分中，我们介绍了五种指标类型和完整参考。在第二部分中，我们追踪了内部生命周期和 AQE 对 Shuffle 统计信息的使用。本文为系列的终章。</em></p>
+</body>
+</html>

@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>深入 Spark SQL Metrics（第一部分）：类型、完整参考和含义</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是 Spark SQL Metrics 深度解析的三部曲：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">第一部分（本文）</strong>：指标类型、完整参考和含义</li>
+<li style="margin:8px 0;line-height:1.8;">第二部分：内部实现机制，以及 AQE 如何利用指标做出运行时决策</li>
+<li style="margin:8px 0;line-height:1.8;">第三部分：扩展 API、UI 渲染和 REST API</li>
+<li style="margin:8px 0;line-height:1.8;">第四部分：Gluten 如何扩展指标系统</li>
+</ul>
+<h2 id="sql-metrics">什么是 SQL Metrics？</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark SQL 的每个物理算子都可以定义 <strong style="color:#07c160;font-weight:bold;">metrics</strong>——在查询执行过程中跟踪各种计数的指标。当你在 SQL 标签页点击一个查询，看到 "number of output rows: 5,000" 或 "peak memory: 512.0 MiB"，那些就是 SQL Metrics。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">它们基于 Spark 的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">AccumulatorV2</code> 框架：每个任务更新自己的本地副本，任务完成后 Driver 进行聚合。</p>
+<h2 id="_1">五种指标类型</h2>
+<h3 id="1-sumcreatemetric">1. Sum（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">createMetric</code>）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">最简单的类型。所有任务的值求和为单一总计。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">显示格式：</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">1,234,567</code></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">典型用途：</strong> 行数、文件数、分区数。</p>
+<h3 id="2-sizecreatesizemetric">2. Size（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">createSizeMetric</code>）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">用于字节量度。显示总计加上每任务的分布。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">显示格式：</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">total (min, med, max): 512.0 MiB (128.0 MiB, 128.0 MiB, 128.0 MiB)</code></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">典型用途：</strong> 峰值内存、Spill 大小、数据大小、Shuffle 字节数。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">(min, med, max)</code> 分布对于检测数据倾斜至关重要——如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">max</code> 是 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">median</code> 的 10 倍，说明有掉队任务。</p>
+<h3 id="3-timingcreatetimingmetric">3. Timing（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">createTimingMetric</code>）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">用于毫秒级耗时。显示总计加上每任务分布。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">显示格式：</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">total (min, med, max): 5.0 s (100 ms, 1.2 s, 2.0 s)</code></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">典型用途：</strong> 聚合时间、排序时间、广播时间。</p>
+<h3 id="4-nstimingcreatenanotimingmetric">4. NsTiming（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">createNanoTimingMetric</code>）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">与 Timing 相同但接受纳秒值，显示时自动转换为毫秒。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">典型用途：</strong> Shuffle 写入时间。</p>
+<h3 id="5-averagecreateaveragemetric">5. Average（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">createAverageMetric</code>）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">用于每任务平均值，显示平均值在各任务间的分布。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">显示格式：</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">avg (min, med, max): (1.2, 2.5, 6.3)</code></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">典型用途：</strong> 哈希探测效率。</p>
+<h2 id="total-min-med-max">如何解读 "total (min, med, max)" 格式</h2>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">peak memory
+total (min, med, max)
+512.0 MiB (128.0 MiB, 128.0 MiB, 128.0 MiB (stage 3.0: task 36))
+</code></pre>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">字段</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">total</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">所有任务的总和</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">min</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">最小的任务值</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">med</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">中位数（第 50 百分位）</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">max</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">最大的任务值，标注 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">(stage X: task Y)</code></td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">负载均衡时：</strong> min ≈ med ≈ max</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">数据倾斜时：</strong> max &gt;&gt; med——检查标注的那个任务</p>
+<h2 id="sql-metrics_1">完整 SQL Metrics 参考</h2>
+<h3 id="scan">Scan 算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">算子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">所有 Scan 算子</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of files read</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceScanExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">filesSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size of files read</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceScanExec</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">scanTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">scan time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceScanExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">metadataTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">metadata time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceScanExec</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pruningTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">dynamic partition pruning time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DataSourceScanExec</code></td>
+</tr></tbody>
+</table>
+<h3 id="_2">聚合算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">算子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">所有聚合算子</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">aggTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time in aggregation build</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExec</code>, <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ObjectHashAggregateExec</code>, <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortAggregateExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">peakMemory</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">peak memory</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExec</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spillSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">spill size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExec</code>, <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ObjectHashAggregateExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">avgHashProbe</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">avg hash probes per key</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">average</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExec</code></td>
+</tr></tbody>
+</table>
+<h3 id="join">Join 算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">算子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">所有 Join 算子</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildDataSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data size of build side</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ShuffledHashJoinExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to build hash map</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ShuffledHashJoinExec</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spillSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">spill size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortMergeJoinExec</code></td>
+</tr></tbody>
+</table>
+<h3 id="sort">Sort 算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">算子</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">sortTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sort time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortExec</code></td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">peakMemory</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">peak memory</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortExec</code></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spillSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">spill size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortExec</code></td>
+</tr></tbody>
+</table>
+<h3 id="shuffle">Shuffle 写入</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dataSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">shuffleBytesWritten</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">shuffle bytes written</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">shuffleRecordsWritten</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">shuffle records written</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">shuffleWriteTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">shuffle write time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">nsTiming</td>
+</tr></tbody>
+</table>
+<h3 id="shuffle-aqeshufflereadexec">Shuffle 读取（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">AQEShuffleReadExec</code>）</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">partitionDataSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">partition data size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numCoalescedPartitions</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of coalesced partitions</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numSkewedPartitions</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of skewed partitions</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numSkewedSplits</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of skewed partition splits</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">fetchWaitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">fetch wait time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">remoteBytesRead</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">remote bytes read</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localBytesRead</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">local bytes read</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr></tbody>
+</table>
+<h3 id="broadcast-exchange">Broadcast Exchange</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dataSize</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">collectTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to collect</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to build</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">broadcastTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to broadcast</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr></tbody>
+</table>
+<h3 id="python-udf">Python UDF 算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonDataSent</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data sent to Python workers</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonDataReceived</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data returned from Python workers</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonBootTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to start Python workers</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonInitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to initialize Python workers</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonTotalTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to run Python workers</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">pythonProcessingTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to execute Python code</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr></tbody>
+</table>
+<h3 id="_3">写入算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of written files</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">written output</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">taskCommitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">task commit time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">jobCommitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">job commit time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr></tbody>
+</table>
+<h3 id="merge-into">MERGE INTO 算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numTargetRowsInserted</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">target rows inserted</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numTargetRowsUpdated</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">target rows updated</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numTargetRowsDeleted</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">target rows deleted</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numTargetRowsCopied</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">target rows copied unmodified</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr></tbody>
+</table>
+<h3 id="_4">有状态流处理算子</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numTotalStateRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of total state rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">stateMemory</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">memory used by state</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">allUpdatesTimeMs</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to update</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">allRemovalsTimeMs</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to remove</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">commitTimeMs</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to commit changes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+</tr></tbody>
+</table>
+<h2 id="wholestagecodegen">WholeStageCodegen 与指标范围</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">大多数算子被 WholeStageCodegen 融合成单一 JVM 方法。它们的行数指标（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code>）各自准确，但没有各自的计时——因为它们作为一个编译函数执行。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在<strong style="color:#07c160;font-weight:bold;">代码生成管道之外</strong>有独立执行阶段并具有独立计时的算子：
+- <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SortExec</code>（排序时间）
+- 聚合算子（聚合构建时间）
+- <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ShuffledHashJoinExec</code>（Hash Table 构建时间）
+- <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">BroadcastExchangeExec</code>（收集/构建/广播时间）
+- <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ShuffleExchangeExec</code>（Shuffle 写入时间）
+- Python UDF 算子（Python 工作器时间）
+- 有状态流处理算子（更新/删除/提交时间）</p>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">第二部分将深入 SQL Metrics 的内部实现机制（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">AccumulatorV2</code> 生命周期），以及 AQE 如何利用 Shuffle 统计信息在运行时重写查询计划。第三部分将介绍 DataSource V2 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CustomMetric</code> 扩展 API、UI 渲染和 REST API。</em></p>
+</body>
+</html>

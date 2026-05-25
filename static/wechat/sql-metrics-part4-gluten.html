@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>深入 Spark SQL Metrics（第四部分）：Gluten 如何扩展指标系统</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是 Spark SQL Metrics 系列的加餐篇：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">第一部分：指标类型、完整参考和含义</li>
+<li style="margin:8px 0;line-height:1.8;">第二部分：内部实现机制，以及 AQE 如何利用指标做出运行时决策</li>
+<li style="margin:8px 0;line-height:1.8;">第三部分：扩展 API、UI 渲染和 REST API</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">第四部分（本文）</strong>：Gluten 如何扩展指标系统</li>
+</ul>
+<h2 id="gluten">Gluten 原生引擎如何产生指标</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Apache Gluten 用原生 C++ 引擎——Velox<sup>[1]</sup> 或 ClickHouse<sup>[2]</sup>——替换了 JVM 执行引擎。由于原生算子独立执行（没有被 JVM 代码生成融合），每个 C++ 算子都是一个独立的函数调用，拥有自己的计时基础设施。作为自然结果，Gluten 暴露了 <strong style="color:#07c160;font-weight:bold;">60+ 个</strong>指标，包括每算子的 Wall Clock Time、分阶段的 Join 指标、原生 Spill 追踪、动态过滤器统计和按存储层级分解的 I/O 指标。</p>
+<h2 id="_1">三层架构</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Gluten 的指标系统桥接了两个世界：Spark 的 JVM 端 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 框架和原生 C++ 执行引擎。架构分为三层：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">Spark SQLMetric (JVM)     ←── MetricsUpdater（桥接层） ←── Velox/CH (C++)
+Map[String, SQLMetric]        updateNativeMetrics()         long[] 数组，通过 JNI 传递
+</code></pre>
+<h3 id="spark-sqlmetric">第一层：Spark SQLMetric（不变）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">每个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">*ExecTransformer</code>——Gluten 对原生 Spark <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">*Exec</code> 算子的替代——都重写了 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">lazy val metrics</code>，使用与原生 Spark 相同的模式。但它不是硬编码指标集，而是委托给后端：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">BackendsApiManager.getMetricsApiInstance
+  .genFilterTransformerMetrics(sparkContext)
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这意味着 Velox 后端和 ClickHouse 后端可以为同一个逻辑算子定义完全不同的指标。运行在 Velox 上的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">FilterExecTransformer</code> 可能暴露 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">peakMemoryBytes</code>，而运行在 ClickHouse 上的同一算子可能暴露不同的内部计数器。指标定义是后端特有的，但它们最终都成为标准的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 对象，Spark UI 和 REST API 可以正常显示。</p>
+<h3 id="metricsupdatergluten">第二层：MetricsUpdater（Gluten 的桥接抽象）</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdater</code> trait 是 Gluten 的核心桥接抽象。它定义了一个方法：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">trait MetricsUpdater extends Serializable {
+  def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit
+}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">每个算子都有对应的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdater</code> 实现。这些 updater 被组织成 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdaterTree</code>，镜像计划 DAG——每个算子一个 updater，以与物理计划相同的父子结构连接。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">为什么需要一棵单独的树？因为 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdaterTree</code> 是 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Serializable</code> 的——它可以被发送到 Executor 端，而无需序列化完整的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SparkPlan</code>（后者包含不可序列化的对象如 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SparkContext</code>）。在 Executor 上，原生执行完成后，这棵树遍历原生指标并更新 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> Accumulator。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">三个特殊的哨兵实例处理边界情况：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdater.None</code> —— 算子没有需要更新的指标</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdater.Todo</code> —— 该算子的指标支持尚未实现</li>
+<li style="margin:8px 0;line-height:1.8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdater.Terminate</code> —— 分支在此终止（没有子节点需要递归）</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">以下是一个具体例子——<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">FilterMetricsUpdater</code>：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">class FilterMetricsUpdater(val metrics: Map[String, SQLMetric]) extends MetricsUpdater {
+  override def updateNativeMetrics(opMetrics: IOperatorMetrics): Unit = {
+    val m = opMetrics.asInstanceOf[OperatorMetrics]
+    metrics(&quot;numOutputRows&quot;) += m.outputRows
+    metrics(&quot;outputVectors&quot;) += m.outputVectors
+    metrics(&quot;outputBytes&quot;) += m.outputBytes
+    metrics(&quot;cpuCount&quot;) += m.cpuCount
+    metrics(&quot;wallNanos&quot;) += m.wallNanos
+    metrics(&quot;peakMemoryBytes&quot;) += m.peakMemoryBytes
+    metrics(&quot;numMemoryAllocations&quot;) += m.numMemoryAllocations
+  }
+}
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">注意每个原生指标字段（如 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">m.wallNanos</code>）如何直接映射到 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 的键。updater 是原生 C++ 命名和 Spark 指标命名空间之间的翻译层。</p>
+<h3 id="jni">第三层：通过 JNI 传递的原生指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在 C++ 端，Velox 引擎在执行过程中以数组形式收集指标——每个算子索引一个条目。当一个任务完成时，Gluten 通过 JNI 边界将这些指标作为包含 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">long[]</code> 数组的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">Metrics</code> 对象传递：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">inputRows[]       — 每个算子消费的行数
+outputRows[]      — 每个算子产出的行数
+wallNanos[]       — 每个算子的墙钟纳秒数
+cpuCount[]        — 每个算子的 CPU 时间
+peakMemoryBytes[] — 每个算子的峰值内存
+...               — 还有 20+ 个数组
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdatingFunction</code> 遍历 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsUpdaterTree</code>，按算子索引从数组中提取每个算子的值。这是一次批量传输——每个任务一次 JNI 调用，而非每行一次——将开销降到最低。</p>
+<h2 id="gluten-60">Gluten 新增了什么——60+ 个指标</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">让我们按类别看看 Gluten 引入的具体指标。</p>
+<h3 id="_2">每算子执行指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在原生 Spark 中，大多数算子仅报告 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code>。在 Gluten 中，<strong style="color:#07c160;font-weight:bold;">每个算子</strong>都拥有以下指标：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">类型</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of <em style="font-style:italic;color:#576b95;">{算子}</em></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">nsTiming</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">每算子的 Wall Clock Time</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">cpuCount</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">cpu wall time count</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">getOutput()</code> 调用次数（批次数）</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">peakMemoryBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">peak memory bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">峰值内存使用</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numMemoryAllocations</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of memory allocations</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">内存分配次数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">outputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">输出行数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">outputVectors</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output vectors</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">sum</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">输出向量（批次）数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">outputBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of output bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">size</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">列式格式的输出数据量</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">loadLazyVectorTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to load lazy vectors</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">timing</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">加载惰性求值向量的时间</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">注意：<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code> 使用算子特定的显示名称——"time of filter"、"time of sort"、"time of scan and filter"、"time of project" 等。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在每个算子上都有 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code> 使得识别原生执行中的瓶颈算子变得直观。</p>
+<h3 id="wallnanos-cpucount">深入理解 wallNanos 和 cpuCount</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这两个指标值得特别关注，因为它们对性能分析最为重要。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">两者都来自 Velox 的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CpuWallTiming</code> 结构体，通过 RAII 计时器（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">DeltaCpuWallTimer</code>）包装每个算子的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">getOutput()</code> 调用来收集：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">struct CpuWallTiming {
+  uint64_t count;      // getOutput() 调用次数（批次数）
+  uint64_t wallNanos;  // 总 Wall Clock Time（steady_clock，纳秒）
+  uint64_t cpuNanos;   // 总 CPU 时间（CLOCK_THREAD_CPUTIME_ID，纳秒）
+};
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">wallNanos</strong> — 使用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">std::chrono::steady_clock</code> 测量。捕获总实际经过时间，<strong style="color:#07c160;font-weight:bold;">包括</strong>算子等待子算子产生数据、I/O 等待或线程调度延迟的时间。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">cpuCount</strong> — 尽管名字叫 cpuCount，但它实际上是<strong style="color:#07c160;font-weight:bold;">调用次数</strong>（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">getOutput()</code> 被调用的次数 = 处理的批次数），而不是 CPU 时间。Gluten JNI 桥接将 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">CpuWallTiming.count</code> 映射到 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">cpuCount</code> 指标。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">如何解读：</strong></p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">场景</th>
+<th style="text-align: center;">wallNanos</th>
+<th style="text-align: center;">cpuCount</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">含义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">大数据量，均匀工作</td>
+<td style="text-align: center;">高</td>
+<td style="text-align: center;">高</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">处理了很多批次，符合预期</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;">少量批次，每个很慢</td>
+<td style="text-align: center;">高</td>
+<td style="text-align: center;">低</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">可能存在数据倾斜或复杂的每批处理逻辑</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">叶子算子（扫描）</td>
+<td style="text-align: center;">高</td>
+<td style="text-align: center;">—</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">主要是 I/O 时间（另查 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ioWaitTime</code>）</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;">中间算子（过滤）</td>
+<td style="text-align: center;">高</td>
+<td style="text-align: center;">—</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">包含等待子算子的时间——与子算子的 wallNanos 对比</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">重要提醒——wallNanos 包含子算子等待时间：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">由于 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code> 包装了整个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">getOutput()</code> 调用，父算子的 wallNanos 包含了等待子算子产生数据的阻塞时间。因此：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">叶子算子</strong>（扫描）：wallNanos ≈ I/O + 计算时间</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">中间算子</strong>（过滤）：wallNanos = 自身计算 + 子算子扫描时间</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">不能简单地对所有算子的 wallNanos 求和</strong>——那会重复计算</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">要隔离算子自身的贡献，将其 wallNanos 与子算子的 wallNanos 做差。Velox 还单独追踪 I/O 相关指标（<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ioWaitTime</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dataSourceReadTime</code>）以帮助分离纯 I/O 与计算。</p>
+<h3 id="_3">扫描专用指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">原生 Spark 的 Scan 算子有 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">scanTime</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numFiles</code>。Gluten 深入得多：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">skippedSplits</code> / <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">processedSplits</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of skipped/processed splits</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">文件分片裁剪效果</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">skippedStrides</code> / <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">processedStrides</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of skipped/processed row groups</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">文件内行组/条带级裁剪</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ioWaitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">io wait time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">I/O 操作的等待时间</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">storageReadBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">storage read bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">从远程存储读取的字节数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localReadBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">local ssd read bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">从本地 SSD 缓存读取的字节数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ramReadBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">ram read bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">从内存缓存读取的字节数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">preloadSplits</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of preloaded splits</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">预加载的分片数（预取）</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dataSourceAddSplitTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data source add split time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">管理分片分配的时间</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dataSourceReadTime</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">data source read time</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">从数据源读取数据的时间</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">storageReadBytes</code> / <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localReadBytes</code> / <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ramReadBytes</code> 的分解在云环境中尤其有价值。如果大部分读取来自 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">storageReadBytes</code>，说明缓存还没热起来。如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ioWaitTime</code> 在 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code> 中占主导地位，瓶颈是网络 I/O 而非 CPU。</p>
+<h3 id="spill">Spill 指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">原生 Spark 在阶段级别追踪 Spill。Gluten 在每算子、每阶段级别追踪：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spilledBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">bytes written for spilling</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Spill 到磁盘的数据量</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spilledRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">total rows written for spilling</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Spill 的行数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spilledPartitions</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">total spilled partitions</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">涉及 Spill 的分区数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spilledFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">total spilled files</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">创建的 Spill 文件数</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对于 Join 算子，Spill 在 Build 阶段和 Probe 阶段分别追踪（见下一节），因此你可以精确定位哪个阶段正面临内存压力。</p>
+<h3 id="_4">动态过滤器指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">动态过滤器（也称运行时过滤器）由 Join 算子生成，用于在运行时裁剪扫描结果。原生 Spark 没有相关指标。Gluten 追踪了完整的生命周期：</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numDynamicFiltersProduced</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of dynamic filters produced</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Join Build 端生成的运行时过滤器数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numDynamicFiltersAccepted</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of dynamic filters accepted</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">被 Scan 算子应用的运行时过滤器数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numReplacedWithDynamicFilterRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of replaced with dynamic filter rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">被运行时过滤器消除的行数</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numDynamicFiltersProduced</code> &gt; 0 但 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numDynamicFiltersAccepted</code> = 0，说明过滤器已生成但未被应用——这表明扫描和 Join 之间的连接方式与优化器的预期不符。如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numReplacedWithDynamicFilterRows</code> 是一个很大的数字，说明运行时过滤器节省了大量工作。</p>
+<h3 id="join-join-20">Join 阶段分离——每个 Join 20+ 个指标</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这可以说是 Gluten 最强大的指标增强。原生 Spark 的 Join 算子仅报告一个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildTime</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numOutputRows</code>。Gluten 将每个 Join 拆分为其组成阶段，每个阶段都有独立的指标：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">Build 阶段：</strong></p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildInputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of hash build input rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 端消费的行数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildOutputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of hash build output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Hash Table 中的行数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildWallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of hash build</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段的 Wall Clock Time</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildPeakMemoryBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash build peak memory bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段的峰值内存</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildSpilledBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash build spilled bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段 Spill 的数据量</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildSpilledRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash build spilled rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段 Spill 的行数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildSpilledPartitions</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash build spilled partitions</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段 Spill 的分区数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildSpilledFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash build spilled files</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 阶段创建的 Spill 文件数</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">Probe 阶段：</strong></p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeInputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of hash probe input rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 端消费的行数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeOutputRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of hash probe output rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">探测后输出的行数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeWallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of hash probe</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段的 Wall Clock Time</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbePeakMemoryBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash probe peak memory bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段的峰值内存</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeSpilledBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash probe spilled bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段 Spill 的数据量</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeSpilledRows</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash probe spilled rows</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段 Spill 的行数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeSpilledPartitions</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash probe spilled partitions</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段 Spill 的分区数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeSpilledFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">hash probe spilled files</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Probe 阶段创建的 Spill 文件数</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">前置/后置 Project：</strong></p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">streamPreProjectionWallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of stream preProjection</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">流侧（Probe 侧）Join 前表达式求值时间</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">streamPreProjectionCpuCount</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">stream preProject cpu wall time count</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">流侧前置 Project 的批次数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildPreProjectionWallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time to build preProjection</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 侧 Join 前表达式求值时间</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">buildPreProjectionCpuCount</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">preProject cpu wall time count</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Build 侧前置 Project 的批次数</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">postProjectionWallNanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of postProjection</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">Join 后表达式求值时间</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">postProjectionCpuCount</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">postProject cpu wall time count</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">后置 Project 的批次数</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在原生 Spark 中，一个慢 Join 几乎不给你任何可用信息——你只知道它很慢，但不知道为什么。有了 Gluten，你可以立即看到：是 Build 阶段慢（也许 Build 端数据太大了）？还是 Probe 阶段慢（也许哈希冲突导致了过多的探测）？Build 阶段是否在 Spill（内存压力）？这种级别的细节彻底改变了你诊断 Join 性能的方式。</p>
+<h3 id="_5">写入指标</h3>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">指标</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">显示名称</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">测量内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">physicalWrittenBytes</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of written bytes</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">实际写入存储的字节数</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">writeIOTime</code> / <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">writeIONanos</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">time of write IO</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">写入过程中的 I/O 时间</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numWrittenFiles</code></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">number of written files</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">产生的文件数</td>
+</tr></tbody>
+</table>
+<h2 id="spark-ui-gluten">在 Spark UI 中阅读 Gluten 指标</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Gluten 的指标出现在同一个 Spark SQL 标签页中，因为它们使用相同的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 框架。算子名称有所变化（例如 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExecTransformer</code> 替代了 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregateExec</code>），但当你点击算子节点时，指标仍出现在同一个侧边面板中。</p>
+<h3 id="_6">关键观察点</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">以下是阅读 Gluten 指标时需要关注的关键模式：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">定位瓶颈算子：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">查看每个算子上的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code>。在健康的查询中，扫描和 Join 算子通常占据大部分时间。如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">FilterExecTransformer</code> 或 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ProjectExecTransformer</code> 有较高的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">wallNanos</code>，说明过滤或 Project 表达式本身开销较大——考虑简化它。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">诊断慢 Join：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对比 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashBuildWallNanos</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeWallNanos</code>。如果 Build 端占主导地位，说明构建输入太大——考虑改变 Join 顺序或添加过滤条件来减小 Build 端。如果 Probe 端占主导地位，查看 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">hashProbeInputRows</code>——过多的探测行或哈希冲突可能是原因。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">检查原生谓词下推：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">skippedSplits</code> &gt; 0，说明原生文件级裁剪正在生效。如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">skippedStrides</code> &gt; 0，说明文件内行组或条带级裁剪正在生效。如果两者都为零，说明谓词没有被下推到原生扫描中——检查列类型是否支持下推。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">验证运行时过滤器效果：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numDynamicFiltersAccepted</code> &gt; 0，说明来自 Join Build 端的运行时过滤器正在被应用到扫描中。查看 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">numReplacedWithDynamicFilterRows</code> 以了解消除了多少行——数字越大意味着 I/O 节省越多。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">检测原生引擎中的内存压力：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">如果任何算子上 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spilledBytes</code> &gt; 0，说明原生引擎正在 Spill 到磁盘。对于 Join，检查是 Build 阶段还是 Probe 阶段在 Spill。对于聚合，Spill 意味着分组基数很高。考虑增加原生内存分配或减少数据量。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">I/O 层级分析：</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对比 Scan 算子上的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">storageReadBytes</code>、<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localReadBytes</code> 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ramReadBytes</code>。在缓存良好的环境中，你希望大部分读取来自 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">ramReadBytes</code> 或 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localReadBytes</code>。高 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">storageReadBytes</code> 意味着你在从远程存储（S3、HDFS）读取——检查缓存层的配置是否正确。</p>
+<h3 id="spark-history-cli">通过 spark-history-cli 访问</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Gluten 指标也可以通过 REST API 和 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark-history-cli</code> 获取，因为它们以标准 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> 值的形式存储：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">spark-history-cli --json -a &lt;app&gt; sql &lt;id&gt;  # 包含 Gluten 指标
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">JSON 输出将包含所有 Gluten 特有的指标以及原生 Spark 指标，使用第三部分中描述的相同 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">{name, value}</code> 格式。</p>
+<h2 id="_7">架构启示</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Gluten 的指标系统为扩展 Spark 的可观测性提供了几个重要启示：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">引擎替换自然带来全面指标。</strong> 当引擎控制每个算子的执行时，它可以测量每一个边界。每个 C++ 算子都是独立的函数调用，拥有自己的开始和结束时间戳。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">MetricsUpdater 模式是可复用的。</strong> 任何原生后端都可以采用这一模式：定义一棵轻量级的、可序列化的 updater 对象树来镜像计划，通过 JNI 传输批量指标数组，然后遍历树来更新 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">SQLMetric</code> Accumulator。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">基于 JNI 数组的传输将开销降到最低。</strong> Gluten 没有为每次指标更新都回调 JVM，而是将所有指标批量打包到 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">long[]</code> 数组中——每个任务一次批量 JNI 传输。即使每个算子有 60+ 个指标，指标开销也可以忽略不计。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">通过 MetricsApi 实现后端无关设计。</strong> <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsApi</code> 抽象意味着 Velox 后端和 ClickHouse 后端可以为同一算子类型定义完全不同的指标。添加新的后端（比如 DataFusion）只需实现 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">MetricsApi</code> 接口——无需修改核心桥接代码。</p>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">在第一部分中，我们介绍了五种指标类型和完整参考。在第二部分中，我们追踪了内部生命周期和 AQE 对 Shuffle 统计信息的使用。在第三部分中，我们探索了扩展 API、UI 渲染和 REST API。本加餐篇分析了 Apache Gluten 如何通过将原生引擎指标桥接回 Spark 框架来扩展指标系统。</em></p>
+<section style="margin-top:30px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#999;">
+  <p style="font-weight:bold;color:#666;">参考链接</p>
+  <p style="margin:6px 0;word-break:break-all;">[1] https://github.com/facebookincubator/velox</p>
+  <p style="margin:6px 0;word-break:break-all;">[2] https://github.com/ClickHouse/ClickHouse</p>
+</section>
+
+</body>
+</html>

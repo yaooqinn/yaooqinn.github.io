@@ -204,7 +204,7 @@ def convert(src: Path, theme_name: str = "green") -> tuple[str, dict]:
 
 
 def out_path(slug: str) -> Path:
-    p = REPO_ROOT / "static" / "tools" / "md2wechat" / "output" / f"{slug}.html"
+    p = REPO_ROOT / "static" / "wechat" / f"{slug}.html"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -219,7 +219,10 @@ def main() -> int:
 
     targets: list[Path] = []
     if args.all:
-        targets = sorted((REPO_ROOT / "content" / "posts").rglob("*.zh.md"))
+        targets = sorted(
+            p for p in (REPO_ROOT / "content" / "posts").rglob("*.zh.md")
+            if p.name != "_index.zh.md"
+        )
     elif args.input:
         targets = [Path(args.input).resolve()]
     else:

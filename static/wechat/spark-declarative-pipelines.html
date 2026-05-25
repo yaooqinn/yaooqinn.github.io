@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>Spark Declarative Pipelines：数据管道的声明式革命</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<h2 id="dag">从 DAG 到声明式：一场范式转变</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">数据工程师最熟悉的工作模式是什么？写一个 DAG。定义任务 A、任务 B、任务 C，然后画出它们之间的依赖关系。Airflow 是这样，Dagster 是这样，大多数编排工具都是这样。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">但问题来了：<strong style="color:#07c160;font-weight:bold;">你真正关心的是数据本身，还是执行 DAG？</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Apache Spark 4.1 给出了一个新答案：<strong style="color:#07c160;font-weight:bold;">Spark Declarative Pipelines（SDP）</strong>。你只需要声明"我要什么表、表的内容怎么来"，剩下的——依赖推断、执行顺序、并行化、错误处理、增量更新——全部交给框架。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这不是一个小功能。这是 Spark 生态对数据管道开发方式的根本性重新思考。</p>
+<h2 id="_1">三分钟快速体验</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">安装只需一行：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">pip install pyspark[pipelines]
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">写一个最简单的管道：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">from pyspark import pipelines as dp
+
+@dp.materialized_view
+def daily_sales():
+    return spark.table(&quot;orders&quot;).groupBy(&quot;date&quot;).agg({&quot;amount&quot;: &quot;sum&quot;})
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">运行：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">spark-pipelines run
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">没有 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">saveAsTable()</code>。没有 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">start()</code>。没有 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">awaitTermination()</code>。你只是描述了"我想要一个按日期汇总的销售表"，SDP 负责让它存在。</p>
+<h2 id="_2">核心概念</h2>
+<h3 id="flow">Flow：数据流动的最小单元</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Flow 是 SDP 的基本构建块。每个 Flow 描述了一个完整的数据流动过程：从哪里读、怎么转换、写到哪里。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 有两种 Flow 语义：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Streaming Flow</strong> → 输出到 Streaming Table（增量处理）</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Batch Flow</strong> → 输出到 Materialized View 或 Temporary View</li>
+</ul>
+<h3 id="dataset">Dataset：你真正关心的东西</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Dataset 是 Flow 的输出，也是管道中可查询的对象。SDP 提供三种 Dataset 类型：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">Streaming Table</strong> —— 持续增量更新的表，适合从 Kafka 等消息系统摄入数据：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">@dp.table
+def raw_events():
+    return (
+        spark.readStream.format(&quot;kafka&quot;)
+        .option(&quot;kafka.bootstrap.servers&quot;, &quot;localhost:9092&quot;)
+        .option(&quot;subscribe&quot;, &quot;events&quot;)
+        .load()
+    )
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">Materialized View</strong> —— 预计算的批处理表，完整刷新：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">@dp.materialized_view
+def hourly_metrics():
+    return (
+        spark.table(&quot;raw_events&quot;)
+        .groupBy(window(&quot;timestamp&quot;, &quot;1 hour&quot;))
+        .agg(count(&quot;*&quot;).alias(&quot;event_count&quot;))
+    )
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">Temporary View</strong> —— 管道执行期间的中间结果，不持久化，但让依赖图更清晰：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">@dp.temporary_view
+def cleaned_events():
+    return spark.table(&quot;raw_events&quot;).filter(&quot;event_type IS NOT NULL&quot;)
+</code></pre>
+<h3 id="_3">依赖自动推断</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是 SDP 最优雅的设计之一。你不需要显式声明 "hourly_metrics 依赖 raw_events"——SDP 分析你的查询逻辑，发现 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark.table("raw_events")</code> 的调用，自动构建依赖图。</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">raw_events (Streaming Table)
+    ↓
+cleaned_events (Temporary View)
+    ↓
+hourly_metrics (Materialized View)
+</code></pre>
+<h2 id="sql">SQL 原生支持</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 不仅支持 Python，还原生支持 SQL。同样的管道可以这样写：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">CREATE STREAMING TABLE raw_events
+AS SELECT * FROM STREAM kafka_source;
+
+CREATE TEMPORARY VIEW cleaned_events
+AS SELECT * FROM raw_events WHERE event_type IS NOT NULL;
+
+CREATE MATERIALIZED VIEW hourly_metrics
+AS SELECT window(timestamp, '1 hour'), count(*) AS event_count
+FROM cleaned_events
+GROUP BY 1;
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">对于以 SQL 为主的团队，这意味着零学习成本。</p>
+<h2 id="_4">批流混合：一个图搞定</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">传统做法中，批处理和流处理是两套独立的管道。SDP 允许你在同一个依赖图中混合使用：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;"># 流式摄入
+@dp.table
+def orders():
+    return spark.readStream.format(&quot;kafka&quot;)...
+
+# 批处理聚合（读取上面的流表）
+@dp.materialized_view
+def daily_summary():
+    return spark.table(&quot;orders&quot;).groupBy(&quot;date&quot;).count()
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 自动管理触发器、调度和检查点，你不需要关心底层的 Structured Streaming 机制。</p>
+<h2 id="flow_1">多 Flow 写入同一目标</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">一个常见场景：你有多个数据源需要写入同一张表。SDP 通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">append_flow</code> 优雅地解决：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">dp.create_streaming_table(&quot;all_orders&quot;)
+
+@dp.append_flow(target=&quot;all_orders&quot;)
+def us_orders():
+    return spark.readStream.table(&quot;orders_us&quot;)
+
+@dp.append_flow(target=&quot;all_orders&quot;)
+def eu_orders():
+    return spark.readStream.table(&quot;orders_eu&quot;)
+</code></pre>
+<h2 id="cli">工程化：项目结构和 CLI</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 提供了完整的项目结构和命令行工具：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;"># 初始化项目
+spark-pipelines init --name my_pipeline
+
+# 验证管道（不读写数据）
+spark-pipelines dry-run
+
+# 执行管道
+spark-pipelines run
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">项目通过 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">spark-pipeline.yml</code> 配置：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">name: my_pipeline
+libraries:
+  - glob:
+      include: transformations/**
+catalog: my_catalog
+database: my_db
+configuration:
+  spark.sql.shuffle.partitions: &quot;1000&quot;
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">dry-run</code> 特别值得一提——它能在不读写任何数据的情况下捕获语法错误、分析错误和循环依赖，这对 CI/CD 集成非常友好。</p>
+<h2 id="_5">与编排工具的关系</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 不是要替代 Airflow 或 Dagster。它专注于 Spark 层面的数据转换和依赖管理。在实际生产中，一个典型的架构是：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">Airflow/Dagster（顶层编排）
+    ├── 触发 SDP 管道（数据转换）
+    ├── 调用外部 API
+    ├── 发送通知
+    └── 其他非 Spark 任务
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 处理数据转换的重活，编排工具处理端到端的工作流。</p>
+<h2 id="_6">我的看法</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">作为 Spark PMC 成员，我认为 SDP 解决了几个长期存在的痛点：</p>
+<ol style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">降低入门门槛</strong>。新手不需要理解 Structured Streaming 的 checkpoint、trigger、outputMode 等概念就能写出可靠的流式管道。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">减少样板代码</strong>。不再需要 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">writeStream.format().option().start().awaitTermination()</code> 这样的仪式性代码。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">统一批流</strong>。同一套声明式 API，同一个依赖图，batch 和 streaming 不再是两个世界。</p>
+</li>
+<li style="margin:8px 0;line-height:1.8;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">AI 友好</strong>。声明式的 Flow 本质上是函数，可以被测试、被调用、被 AI 编程助手理解和生成。这对 AI 辅助数据工程意义重大。</p>
+</li>
+</ol>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">SDP 的设计思路源自 Databricks 在生产环境中验证过的 Delta Live Tables（DLT）模式，现在被带入了开源 Spark。这意味着整个社区都能受益于这些经过大规模验证的最佳实践。</p>
+<h2 id="_7">上手试试</h2>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">pip install pyspark[pipelines]
+spark-pipelines init --name hello_sdp
+cd hello_sdp
+spark-pipelines run
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">更多内容请参阅官方编程指南：Spark Declarative Pipelines Programming Guide<sup>[1]</sup></p>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">Spark Declarative Pipelines 在 Apache Spark 4.1 中引入，相关设计文档见 SPARK-51727<sup>[2]</sup>。</em></p>
+<section style="margin-top:30px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#999;">
+  <p style="font-weight:bold;color:#666;">参考链接</p>
+  <p style="margin:6px 0;word-break:break-all;">[1] https://spark.apache.org/docs/latest/declarative-pipelines-programming-guide.html</p>
+  <p style="margin:6px 0;word-break:break-all;">[2] https://issues.apache.org/jira/browse/SPARK-51727</p>
+</section>
+
+</body>
+</html>

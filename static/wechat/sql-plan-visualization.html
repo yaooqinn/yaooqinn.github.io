@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>重新设计 Apache Spark 的 SQL 执行计划可视化</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark Web UI 的 SQL 标签页一直有一个查询计划可视化功能。它将物理计划展示为 DAG——算子作为节点，数据流作为边。理论上，这是 Spark 中最强大的调试工具之一。但实际上，对于复杂查询来说，它几乎不可用。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">现在，一切都变了。</strong> SPARK-55785<sup>[1]</sup> 重新设计了 SQL 执行计划可视化——紧凑布局、交互式指标面板，以及一目了然的边标签。</p>
+<h2 id="_1">问题所在</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">旧的可视化将<strong style="color:#07c160;font-weight:bold;">所有指标</strong>塞进每个节点标签中：</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">HashAggregate
+number of output rows: total (min, med, max)
+  5,000,000 (1,250,000, 1,250,000, 1,250,000)
+time in aggregation build: total (min, med, max)
+  2.3s (500ms, 575ms, 650ms)
+peak memory: total (min, med, max)
+  512.0 MiB (128.0 MiB, 128.0 MiB, 128.0 MiB)
+avg hash probe bucket list iters: ...
+  1.2 (1.1, 1.2, 1.3)
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">在一个真实查询中有 30 多个算子时，你得到的是一堵文字墙，没有任何重点突出。最关键的信息——<em style="font-style:italic;color:#576b95;">哪个算子慢？数据在哪里膨胀？在哪里被过滤？</em>——都淹没在视觉噪音中。</p>
+<h2 id="_2">解决方案</h2>
+<h3 id="_3">紧凑模式：见林不见木</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">新的默认视图只显示<strong style="color:#07c160;font-weight:bold;">算子名称</strong>。没有指标干扰。计划结构一目了然：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><img style="max-width:100%;border-radius:8px;margin:15px 0;display:block;" alt="紧凑计划" src="https://raw.githubusercontent.com/yaooqinn/spark/f8a5629da0c/docs/final-compact.png"></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">每个节点只是算子名称。每个集群显示 WholeStageCodegen 阶段编号和总耗时。计划可以在一个屏幕内展示，而不需要无尽滚动。</p>
+<h3 id="_4">边标签：数据流一目了然</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">最有价值的改进不在节点上——而在<strong style="color:#07c160;font-weight:bold;">边</strong>上。行数现在出现在每条边上，精确显示算子之间流动的数据量：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><img style="max-width:100%;border-radius:8px;margin:15px 0;display:block;" alt="边行数标签" src="https://raw.githubusercontent.com/yaooqinn/spark/14cecfad4cf/docs/sql-plan-edges.png"></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这使得几类性能问题<strong style="color:#07c160;font-weight:bold;">立即可见</strong>：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Join 膨胀</strong> —— 1M × 500K 输入产生 5B 行？你会在边标签上立即看到。</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">过滤效果</strong> —— 你的过滤器将 5B 行减少到 400 行？边标签直接告诉你，无需点击任何东西。</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">聚合影响</strong> —— 直接看到你的 GROUP BY 将数据集压缩了多少。</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这些是工程师在调试慢查询时最先问的问题。以前，你需要在脑中追踪指标表或使用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN</code> 输出。现在答案就在图上。</p>
+<h3 id="_5">点击查看详情：指标侧边面板</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">需要完整的信息？点击任意节点，一个侧边面板会滑入，展示结构化的指标表：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><img style="max-width:100%;border-radius:8px;margin:15px 0;display:block;" alt="侧边面板" src="https://raw.githubusercontent.com/yaooqinn/spark/f8a5629da0c/docs/final-panel.png"></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">面板显示：
+- 每个指标的 <strong style="color:#07c160;font-weight:bold;">Total / Min / Med / Max</strong> 分解
+- 鼠标悬停时的<strong style="color:#07c160;font-weight:bold;">算子描述</strong>，用于区分相同名称的算子（当你有多个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">HashAggregate</code> 节点时非常有用）
+- <strong style="color:#07c160;font-weight:bold;">点击集群</strong>可查看所有子算子指标的分组展示</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这种设计参考了 Databricks 的查询分析器<sup>[2]</sup>，并为开源 Spark UI 做了适配。</p>
+<h3 id="_6">模式切换：你的选择</h3>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">更喜欢旧的详细视图？一个复选框让你在紧凑模式和详细模式之间切换。在详细模式下，指标以 10px 字体渲染在图节点内：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><img style="max-width:100%;border-radius:8px;margin:15px 0;display:block;" alt="详细模式" src="https://raw.githubusercontent.com/yaooqinn/spark/f8a5629da0c/docs/final-detailed.png"></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">你的偏好保存在 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">localStorage</code> 中——UI 会记住你的选择。</p>
+<h2 id="_7">设计决策</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">值得说明的几个选择：</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">为什么选择边标签而非节点指标？</strong> 因为最重要的性能信号是<em style="font-style:italic;color:#576b95;">算子之间的数据量</em>，而不是单个算子的内部细节。边标签在计划层面回答"我的数据发生了什么？"节点指标回答"为什么这个特定算子慢？"——后者属于详情面板，而不是概览视图。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">为什么使用纯文本标签而非 HTML？</strong> 旧的可视化使用 dagre-d3 的 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">labelType: "html"</code> 在节点内进行富文本格式化。这导致渲染不一致、使暗黑模式支持更困难，并产生过大的节点。纯文本标签更轻量、更可预测，让 dagre-d3 正确地自动调整节点大小。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">为什么用侧边面板而非工具提示？</strong> 指标表可能很大——6 个以上指标，每个都有 Total/Min/Med/Max 列。工具提示会被裁剪或重叠。固定的侧边面板提供稳定、可滚动的空间，并且不会遮挡图形。</p>
+<h2 id="_8">未来计划</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是更广泛的 Spark Web UI 现代化<sup>[3]</sup> 工作的一部分。正在讨论的未来改进包括：</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">为单个选定算子显示数据流路径</li>
+<li style="margin:8px 0;line-height:1.8;">通过颜色高亮瓶颈算子（时间/行数热力图）</li>
+<li style="margin:8px 0;line-height:1.8;">边标注数据大小（字节），而不仅仅是行数</li>
+</ul>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><em style="font-style:italic;color:#576b95;">本功能作为 SPARK-55785<sup>[1]</sup>（PR #54565<sup>[4]</sup>）贡献。感谢 @sarutak<sup>[5]</sup> 和 @gengliangwang<sup>[6]</sup> 的审阅，以及提出的边标签建议。</em></p>
+<section style="margin-top:30px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#999;">
+  <p style="font-weight:bold;color:#666;">参考链接</p>
+  <p style="margin:6px 0;word-break:break-all;">[1] https://issues.apache.org/jira/browse/SPARK-55785</p>
+  <p style="margin:6px 0;word-break:break-all;">[2] https://docs.databricks.com/en/sql/user/queries/query-profile.html</p>
+  <p style="margin:6px 0;word-break:break-all;">[3] https://issues.apache.org/jira/browse/SPARK-55760</p>
+  <p style="margin:6px 0;word-break:break-all;">[4] https://github.com/apache/spark/pull/54565</p>
+  <p style="margin:6px 0;word-break:break-all;">[5] https://github.com/sarutak</p>
+  <p style="margin:6px 0;word-break:break-all;">[6] https://github.com/gengliangwang</p>
+</section>
+
+</body>
+</html>

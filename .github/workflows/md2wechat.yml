@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Specific .zh.md path (leave blank to convert all changed in last commit)'
+        description: 'Specific .zh.md path (leave blank = all)'
         required: false
         default: ''
       theme:
@@ -20,13 +20,17 @@ on:
         type: choice
         options: [green, blue, orange, purple]
 
+permissions:
+  contents: write
+
 jobs:
   convert:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # need previous commit to diff
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
@@ -39,19 +43,18 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${{ github.event.inputs.target }}" ]; then
-            echo "files=${{ github.event.inputs.target }}" >> "$GITHUB_OUTPUT"
-          else
-            # Files changed in the pushed commit range, *.zh.md only
+            FILES="${{ github.event.inputs.target }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
             CHANGED=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} -- 'content/posts/**/*.zh.md' || true)
             if [ -z "$CHANGED" ]; then
-              # Fallback: convert all (workflow_dispatch with no input on a stale main)
               CHANGED=$(find content/posts -name '*.zh.md' -type f)
             fi
-            # Normalize: space-separated on one line for the next step
             FILES=$(echo "$CHANGED" | xargs)
-            echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          else
+            FILES=$(find content/posts -name '*.zh.md' -type f | xargs)
           fi
-          echo "Will convert: $(grep '^files=' "$GITHUB_OUTPUT")"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Will convert: $FILES"
 
       - name: Convert
         run: |
@@ -63,30 +66,57 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wechat-html
-          path: static/tools/md2wechat/output/*.html
-          if-no-files-found: error
-          retention-days: 30
+      - name: Generate index
+        run: |
+          set -euo pipefail
+          cd static/wechat
+          {
+            echo '<!doctype html><html lang="zh-cn"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            echo '<title>WeChat HTML index</title>'
+            echo '<style>body{max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.7;color:#333}h1{font-size:20px;border-bottom:2px solid #07c160;padding-bottom:8px}li{margin:8px 0}a{color:#07c160;text-decoration:none;word-break:break-all}.note{background:#f7f7f7;padding:12px;border-left:3px solid #07c160;font-size:14px;color:#666;border-radius:4px}</style>'
+            echo '</head><body>'
+            echo '<h1>📨 WeChat HTML 索引</h1>'
+            echo '<p class="note">手机打开 → 进入文章 → 长按 → 全选 → 复制 → 粘贴进公众号编辑器。图片自动转 WeChat CDN。</p>'
+            echo '<ul>'
+            for f in *.html; do
+              [ "$f" = "index.html" ] && continue
+              SLUG="${f%.html}"
+              echo "<li><a href=\"./${f}\">${SLUG}</a></li>"
+            done
+            echo '</ul></body></html>'
+          } > index.html
+
+      - name: Commit & push to main
+        run: |
+          set -euo pipefail
+          git config user.email "yao@apache.org"
+          git config user.name "Kent Yao (md2wechat bot)"
+          git add static/wechat/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(wechat): regenerate WeChat HTML [skip ci]"
+          # Avoid recursion: push triggers workflow only on content/scripts/workflow paths.
+          # static/wechat/** is NOT in the trigger paths, so this push is safe.
+          git pull --rebase origin main
+          git push origin main
 
       - name: Job summary
         run: |
           {
-            echo "## 📨 WeChat HTML ready"
+            echo "## 📨 WeChat HTML — open on your phone"
             echo ""
-            echo "Downloaded the **wechat-html** artifact at the top of this run page."
+            echo "Files are now committed to \`static/wechat/\` and served at fixed URLs after GitHub Pages deploys (~1 min)."
             echo ""
-            echo "### Files"
-            for f in static/tools/md2wechat/output/*.html; do
-              SIZE=$(wc -c < "$f")
-              echo "- \`$(basename "$f")\` (${SIZE} bytes)"
+            for f in static/wechat/*.html; do
+              SLUG=$(basename "$f" .html)
+              echo "- 🔗 https://yaooqinn.github.io/wechat/${SLUG}.html"
             done
             echo ""
-            echo "### Paste into WeChat"
-            echo "1. Unzip the artifact"
-            echo "2. Open the .html file in a browser"
-            echo "3. Select all (⌘/Ctrl-A) → copy → paste into the 公众号 editor"
-            echo "4. Images at \`https://yaooqinn.github.io/...\` are auto-fetched by WeChat — no manual re-upload"
+            echo "### Paste into WeChat (mobile)"
+            echo "1. Open the URL above on your phone"
+            echo "2. Long-press → 全选 → 复制"
+            echo "3. Paste into 公众号 editor — images auto-fetch to WeChat CDN"
           } >> "$GITHUB_STEP_SUMMARY"

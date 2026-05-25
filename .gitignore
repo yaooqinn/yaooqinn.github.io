@@ -8,8 +8,8 @@ resources/_gen/
 __pycache__/
 *.pyc
 
-# md2wechat generated HTML (rebuilt by CI; not source of truth)
-static/tools/md2wechat/output/
+# md2wechat generated HTML lives in static/wechat/ and IS tracked
+# (it's the artifact users paste into the 公众号 editor).
 
 # OS
 .DS_Store
