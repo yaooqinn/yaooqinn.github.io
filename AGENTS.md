@@ -88,8 +88,24 @@ Read 2-3 existing posts under `content/posts/spark/` to calibrate tone before dr
 
 ## Agent Skills
 
-### md2wechat (`.github/skills/md2wechat/SKILL.md`)
+### md2wechat (`.github/skills/md2wechat/SKILL.md` + `scripts/md2wechat.py`)
 Converts Markdown blog posts to WeChat Official Account (微信公众号) formatted HTML with inline styles, footnote citations for links, and front matter stripping. Trigger: "公众号", "wechat", "微信排版".
+
+**Automation**: `.github/workflows/md2wechat.yml` runs on every push that touches `content/posts/**/*.zh.md` and uploads the rendered HTML as a workflow artifact (`wechat-html`). Manual run via Actions → "md2wechat" → "Run workflow" (optional theme + target).
+
+**Local usage**:
+```bash
+# one-time setup
+uv venv .venv && .venv/bin/pip install markdown
+
+# convert one file
+.venv/bin/python scripts/md2wechat.py content/posts/spark/dark-mode-spark-ui.zh.md
+
+# convert all
+.venv/bin/python scripts/md2wechat.py --all --theme blue
+```
+
+**Why API-based publishing is NOT automated**: WeChat 公众号 group-send API requires an *organization-authenticated* account; this is an *unauthenticated personal subscription* account. Manual paste-into-editor is the only viable path. Images referenced as `/images/...` are rewritten to `https://yaooqinn.github.io/...` in the generated HTML, so the WeChat editor will auto-fetch them on paste — no manual re-upload step required.
 
 ## Analytics
 

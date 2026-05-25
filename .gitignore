@@ -1,16 +1,16 @@
-# Hugo
-/public/
-/resources/_gen/
-/assets/jsconfig.json
-hugo_stats.json
+# Hugo build output
+public/
+resources/_gen/
 .hugo_build.lock
 
-# IDE
-.idea/
-.vscode/
+# Python venv (local md2wechat dev)
+.venv/
+__pycache__/
+*.pyc
+
+# md2wechat generated HTML (rebuilt by CI; not source of truth)
+static/tools/md2wechat/output/
 
 # OS
 .DS_Store
 Thumbs.db
-
-copilot-session-*.md

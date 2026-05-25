@@ -1,0 +1,92 @@
+name: md2wechat
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'content/posts/**/*.zh.md'
+      - 'scripts/md2wechat.py'
+      - '.github/workflows/md2wechat.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Specific .zh.md path (leave blank to convert all changed in last commit)'
+        required: false
+        default: ''
+      theme:
+        description: 'Color theme'
+        required: false
+        default: 'green'
+        type: choice
+        options: [green, blue, orange, purple]
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # need previous commit to diff
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install markdown
+
+      - name: Pick target files
+        id: pick
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.target }}" ]; then
+            echo "files=${{ github.event.inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            # Files changed in the pushed commit range, *.zh.md only
+            CHANGED=$(git diff --name-only ${{ github.event.before }}..${{ github.sha }} -- 'content/posts/**/*.zh.md' || true)
+            if [ -z "$CHANGED" ]; then
+              # Fallback: convert all (workflow_dispatch with no input on a stale main)
+              CHANGED=$(find content/posts -name '*.zh.md' -type f)
+            fi
+            # Normalize: space-separated on one line for the next step
+            FILES=$(echo "$CHANGED" | xargs)
+            echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Will convert: $(grep '^files=' "$GITHUB_OUTPUT")"
+
+      - name: Convert
+        run: |
+          set -euo pipefail
+          THEME="${{ github.event.inputs.theme || 'green' }}"
+          for f in ${{ steps.pick.outputs.files }}; do
+            echo "::group::$f"
+            python3 scripts/md2wechat.py "$f" --theme "$THEME"
+            echo "::endgroup::"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wechat-html
+          path: static/tools/md2wechat/output/*.html
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Job summary
+        run: |
+          {
+            echo "## 📨 WeChat HTML ready"
+            echo ""
+            echo "Downloaded the **wechat-html** artifact at the top of this run page."
+            echo ""
+            echo "### Files"
+            for f in static/tools/md2wechat/output/*.html; do
+              SIZE=$(wc -c < "$f")
+              echo "- \`$(basename "$f")\` (${SIZE} bytes)"
+            done
+            echo ""
+            echo "### Paste into WeChat"
+            echo "1. Unzip the artifact"
+            echo "2. Open the .html file in a browser"
+            echo "3. Select all (⌘/Ctrl-A) → copy → paste into the 公众号 editor"
+            echo "4. Images at \`https://yaooqinn.github.io/...\` are auto-fetched by WeChat — no manual re-upload"
+          } >> "$GITHUB_STEP_SUMMARY"
