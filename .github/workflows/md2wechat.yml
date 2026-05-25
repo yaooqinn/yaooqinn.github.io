@@ -97,9 +97,10 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "chore(wechat): regenerate WeChat HTML [skip ci]"
-          # Avoid recursion: push triggers workflow only on content/scripts/workflow paths.
-          # static/wechat/** is NOT in the trigger paths, so this push is safe.
+          git commit -m "chore(wechat): regenerate WeChat HTML"
+          # md2wechat workflow's path filter excludes static/wechat/**,
+          # so this push won't retrigger us. We DO want Hugo's Pages
+          # workflow to fire — that's how static/wechat/*.html reaches the site.
           git pull --rebase origin main
           git push origin main
 
