@@ -6,7 +6,6 @@
 </head>
 <body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
 <h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">LLM 做 Join Order：从 Databricks 的实验,看 Apache Spark 视角下的三层落地阶梯</h1>
-<img src="https://yaooqinn.github.io/images/posts/llm-join-order-cover.png" alt="cover" style="width:100%;max-width:100%;border-radius:8px;margin:0 0 20px 0;display:block;"/>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">2026 年 4 月,Databricks 工程博客发了一篇与 UPenn 合作的研究:<em style="font-style:italic;color:#576b95;">Are LLM agents good at join order optimization?</em><sup>[1]</sup> 给的结论很扎眼——在 Join Order Benchmark (JOB)<sup>[2]</sup> 的 113 条查询上,LLM agent 选出的 join 顺序让 Databricks Runtime 的 P90 latency 下降 41%、几何均值提速 1.288×,<strong style="color:#07c160;font-weight:bold;">超过给 optimizer 喂"完美基数估计"得到的下界</strong>,也超过了 BayesQO<sup>[3]</sup> 这类离线优化器。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">作为长期做查询引擎的人,看到这种数字第一反应是怀疑。读完原文 + UPenn 的后续 blog<sup>[4]</sup>,怀疑没了大半,但有几个观察值得拎出来——尤其是放在 Apache Spark 这种开源引擎的语境里。</p>
 <h2 id="_1">这篇研究到底做了什么</h2>
