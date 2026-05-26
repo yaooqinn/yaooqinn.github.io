@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<title>只让 LLM 改 SQL,几乎什么都不会发生</title>
+</head>
+<body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">只让 LLM 改 SQL,几乎什么都不会发生</h1>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">我上一篇博客写了 Databricks 与 UPenn 的 LLM × join order 实验,论点是:LLM agent 在离线 join-order 调优上是能工作的,因为它<strong style="color:#07c160;font-weight:bold;">绕过了 cost model 的两道近似</strong>——直接观察 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">execute(plan)</code> 的真实 wall-clock,以试错代价换掉模型偏差。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">那篇博客的潜台词是:<strong style="color:#07c160;font-weight:bold;">"喂对信号、给够反馈,LLM 才能在查询引擎里发挥价值。"</strong> 这一篇写它的反面——<strong style="color:#07c160;font-weight:bold;">当你不喂、不训、不反馈,只是直接调一个商业 LLM 的 API 让它改 SQL,会发生什么。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">答案有点尴尬。</p>
+<h2 id="_1">一个让人尴尬的数字</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">最近读到一篇 2025 年 8 月放出来的论文 E³-Rewrite<sup>[1]</sup>(arXiv:2508.09023),做的是用 LLM 改写 SQL,目标三联——<strong style="color:#07c160;font-weight:bold;">Executable / Equivalent / Efficient</strong>。论文的核心贡献是一套基于 GRPO 的 RL 微调流程,我下面会展开。但真正让我停下来盯了一会儿的,是它的 Table 1 里"baseline"那一行:</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">方法</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">TPC-H 10GB avg latency (s)</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">TPC-H p90 latency (s)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">Original (不改写)</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">78.81</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">300.00</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">LLM-only (GPT-4o)</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">74.92</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">300.00</strong></td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">LearnedRewrite (SIGMOD'22)</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">41.34</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">103.41</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;">LLM-R²</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">54.76</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">300.00</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">R-Bot</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">39.89</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">84.27</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">E³-Rewrite (Qwen3-32B, 训练后)</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">29.67</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">51.37</strong></td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">(数据来源:E³-Rewrite 论文 Table 1,PostgreSQL,TPC-H SF=10,~2000 条 query,每条跑 5 次去掉极值取均值。)</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">把视线锁在第二行:<strong style="color:#07c160;font-weight:bold;">直接拿一个公认最强的商业大模型(GPT-4o)写 prompt 让它改 SQL,平均执行时间从 78.81s 降到 74.92s。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">几乎等于没改。在统计意义上,这个数字和"什么都不做"区分不开。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">而最后一行是同一篇论文里他们自己的方法:<strong style="color:#07c160;font-weight:bold;">同一个 PostgreSQL、同一个 workload,把模型换成 14B/32B 的开源 Qwen,喂上 plan 信号、用 RL 训一遍,平均时间从 74.92 干到 29.67——降到原始查询的 38%。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">差距不是 LLM 的差距(GPT-4o 本身比 Qwen3-32B 在大多数任务上更强),是<strong style="color:#07c160;font-weight:bold;">信号的差距</strong>。</p>
+<h2 id="llm-sql-sql">为什么 LLM 知道 SQL,却改不动 SQL</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这件事乍看反直觉:LLM 训练语料里 SQL 多得是,改一个 query 改成等价的高效形式听起来不算难。但仔细想就明白了。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">让一个人改写 SQL,他改之前会做什么?</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN</code> 看一眼当前 plan 长什么样</li>
+<li style="margin:8px 0;line-height:1.8;">看哪一步是 full table scan、哪个 join 走了 nested loop</li>
+<li style="margin:8px 0;line-height:1.8;">看哪个 filter 把行数从一亿砍到一千</li>
+<li style="margin:8px 0;line-height:1.8;">然后才决定:这个子查询能不能拍平、这个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">OR</code> 能不能拆成 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">UNION ALL</code>、这个 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXISTS</code> 能不能改成 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">IN</code></li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">人拿到的不只是 SQL 字符串,还有<strong style="color:#07c160;font-weight:bold;">引擎对这串 SQL 的解读</strong>——什么慢、为什么慢、瓶颈在哪。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">而 prompt 里只塞一段 SQL 让 LLM 改写,等于让人<strong style="color:#07c160;font-weight:bold;">只看 SQL 字符串、不看 EXPLAIN</strong> 去优化。LLM 知道一万种 rewrite 套路,但它不知道<strong style="color:#07c160;font-weight:bold;">这一条 query 在这个数据库上当下哪里慢</strong>,于是它要么照着 schema 名瞎猜应用一些"通用"改写,要么干脆原样输出。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">74.92 vs 78.81——这个数字其实在告诉你,<strong style="color:#07c160;font-weight:bold;">它要么原样输出,要么改完跟没改差不多;真正改对的比例,低到在平均值上看不出来</strong>。</p>
+<h2 id="explain">第一步:把 EXPLAIN 喂给它</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">E³-Rewrite 论文里第一件做的事就是这个——他们叫 <strong style="color:#07c160;font-weight:bold;">Execution Hint Injection</strong>:在把 SQL 喂给模型之前,先跑一次 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN</code>(训练阶段用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN ANALYZE</code>),拿到执行计划,<strong style="color:#07c160;font-weight:bold;">把这棵树线性化成带缩进的文本</strong>,prepend 到 SQL 前面。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这样 prompt 里多了一段类似:</p>
+<pre style="background:#1e1e1e;color:#d4d4d4;padding:15px;border-radius:8px;overflow-x:auto;margin:15px 0;font-size:13px;line-height:1.5;"><code style="background:transparent;color:inherit;padding:0;font-size:13px;">Seq Scan on lineitem  (cost=0.00..172800 rows=6000000)
+  Filter: l_shipdate &lt; '1998-12-01'::date
+  Rows Removed by Filter: 4500000   ← 瓶颈
+-&gt;  Hash Join  (cost=...)
+    Hash Cond: (l_orderkey = o_orderkey)
+    ...
+</code></pre>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">模型看到这段就知道:<strong style="color:#07c160;font-weight:bold;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">lineitem</code> 上那个 filter 把 75% 的行扔了,而且是在 join 之前过滤,这是个全表扫</strong>。它现在有了一个具体的优化目标——把 filter 下推、或者建议加索引、或者改写谓词形式。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">效果立竿见影。同一篇论文 Table 4 的消融实验:</p>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;">
+<thead>
+<tr>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">E³-Rewrite 变体</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">avg latency (s)</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">improved queries</th>
+<th style="background:#07c160;color:#fff;padding:10px 8px;text-align:left;font-weight:bold;border:1px solid #e8e8e8;">equivalence ratio</th>
+</tr>
+</thead>
+<tbody><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">完整版</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">29.67</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">210</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">99.6%</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">去掉 execution hint</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">39.56</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;"><strong style="color:#07c160;font-weight:bold;">163</strong></td>
+<td style="padding:8px;border:1px solid #e8e8e8;">100%</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">去掉 RL</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">32.29</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">194</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">90.1%</td>
+</tr><tr style="background:#f9f9f9;">
+<td style="padding:8px;border:1px solid #e8e8e8;">去掉 demonstration retrieval</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">35.39</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">177</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">96.5%</td>
+</tr><tr>
+<td style="padding:8px;border:1px solid #e8e8e8;">不微调 vanilla</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">56.71</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">125</td>
+<td style="padding:8px;border:1px solid #e8e8e8;">84.8%</td>
+</tr></tbody>
+</table>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">(同上,TPC-H 10GB。)</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">把 execution hint 去掉,latency 从 29.67 涨到 39.56——<strong style="color:#07c160;font-weight:bold;">单这一项贡献了 25% 的退化</strong>。一个本来什么都不会改的 LLM,只是因为多看了一段 EXPLAIN,就知道该往哪里使劲。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这件事的一般化结论是:<strong style="color:#07c160;font-weight:bold;">模型不是没能力,是没视野。</strong> LLM × 查询引擎的任何严肃工作,prompt 里都得有 plan 的某种表示——不一定是文本 EXPLAIN(JSON、protobuf、operator graph 都行),但必须有。光给 SQL 字符串,等于让人闭眼优化。</p>
+<h2 id="reward">第二步:用 reward 训它</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">光有 plan 还不够。把 EXPLAIN 喂给 GPT-4o,会不会就工作了?会更好,但还差很远。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">回到 Table 4 第三行,<strong style="color:#07c160;font-weight:bold;">"去掉 RL"这个变体——意思是保留 plan hint、保留 demonstration,但不做 RL 微调,直接用基础模型推理。结果是 32.29s 和 90.1% 等价率。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">90.1% 是什么概念?每改 100 条 query,<strong style="color:#07c160;font-weight:bold;">有 10 条改写完跟原 query 不等价</strong>——执行出来结果不一样,或者直接报错。在生产环境里这意味着什么不用我多说。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">E³-Rewrite 的训练目标设计得很直白,三个 reward 分量:</p>
+<ol style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Executability</strong>:改写出来的 SQL 能不能在 DBMS 里跑起来(语法 + schema 检查)</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Equivalence</strong>:跑起来的结果和原 query 是不是一样</li>
+<li style="margin:8px 0;line-height:1.8;"><strong style="color:#07c160;font-weight:bold;">Efficiency</strong>:能跑起来、又等价的前提下,比原 query 快多少(用 cost model 估或者实际跑一次)</li>
+</ol>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">三个分量加权打分,GRPO 算法在多个候选 rewrite 之间做组内归一更新。<strong style="color:#07c160;font-weight:bold;">Curriculum</strong> 设计得也克制:<strong style="color:#07c160;font-weight:bold;">第一阶段强调 executability + equivalence(先逼它改对),第二阶段才把 efficiency reward 加进来</strong>——避免一开始就追快导致模型为了快牺牲等价。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">训练完,等价率从 90.1% 涨到 <strong style="color:#07c160;font-weight:bold;">99.6%</strong>,latency 从 32.29 降到 29.67。这一步不是锦上添花,是把"能用"和"不能用"分开。</p>
+<h2 id="_2">第三步:训练用真实数据,推理用估算</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是 E³-Rewrite 里一个我觉得被低估的工程细节——他们在论文里只写了短短一段,但值得拎出来说。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN ANALYZE</code> 在 PostgreSQL 里会<strong style="color:#07c160;font-weight:bold;">实际执行 query</strong>,然后给你每个算子的真实行数和真实耗时。<code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN</code>(不带 ANALYZE)只给优化器估算出来的 cost,不跑 query。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">E³-Rewrite 的做法是:<strong style="color:#07c160;font-weight:bold;">训练阶段用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN ANALYZE</code> 拿真实 plan(因为训练慢一点没关系,样本质量更重要),推理/部署阶段用 <code style="background:#f8f8f8;color:#c7254e;padding:2px 6px;border-radius:3px;font-family:Monaco,Menlo,Consolas,monospace;font-size:14px;">EXPLAIN</code>(因为线上要快,不能为了改写 SQL 先跑一遍原 query)</strong>。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">这是一个朴素但通用的工程模式:<strong style="color:#07c160;font-weight:bold;">训练时给模型 oracle 信号,推理时给它 proxy 信号,让模型学到从 proxy 推断 oracle 的能力</strong>。说白了就是 distillation 的一种变体,但用在 systems × LLM 上很自然——几乎所有 query optimization 相关的任务都符合这个 oracle/proxy 不对称:</p>
+<ul style="padding-left:25px;margin:12px 0;">
+<li style="margin:8px 0;line-height:1.8;">cost model:训练能跑真实 wall-clock,推理只能估</li>
+<li style="margin:8px 0;line-height:1.8;">cardinality estimation:训练能跑真实 row count,推理只能查统计</li>
+<li style="margin:8px 0;line-height:1.8;">index recommendation:训练能跑 what-if,推理不能</li>
+</ul>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">值得记的一个 pattern。</p>
+<h2 id="_3">三个还没答案的问题</h2>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">写到这里,论点已经清楚了——"LLM 改 SQL"这件事的瓶颈不在 LLM,在信号通路。但论文给的方案离能在开源引擎里落地还有距离,我留三个问题:</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">1. 把 plan 喂给 LLM,有没有一个标准化的接口?</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">EXPLAIN 文本只是最朴素的方案。它有版本问题(不同引擎、不同版本输出格式都不一样)、有信息丢失(很多内部 state 不在 EXPLAIN 里)、还有 token 浪费(一棵深 plan 文本化下来很长)。如果未来 LLM × query engine 真的要工业化,<strong style="color:#07c160;font-weight:bold;">这一层很可能需要一个引擎中立的 plan 表示</strong>——protobuf? Substrait? 还是某种 LLM 友好的中间格式?现在还没共识。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">2. 等价性验证这件事,工业界还没有共识的工具。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">E³-Rewrite 的 reward 函数里写了"equivalence verification",但论文没说具体怎么做的——是 SPES<sup>[2]</sup>? SQLancer<sup>[3]</sup>? 还是用 LLM 自己判?三种路径各有限制:SPES 精确但只支持子集 SQL;SQLancer 强但是 differential testing,只能找反例不能证等价;LLM judge 灵活但本身可能幻觉。<strong style="color:#07c160;font-weight:bold;">没有靠谱的等价验证工具,任何 LLM rewrite 方案在落到生产前都过不了 review</strong>。这一层基础设施缺得很明显。</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">3. 10GB benchmark 上的结论,到 TB 级、到真实多租户负载,会不会反转?</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">E³-Rewrite 跑的是 TPC-H SF=10(10GB),这在学术界已经算偏大,但离生产环境 TB 级还差两到三个数量级。规模上去之后两件事会变:一是 rewrite 带来的绝对收益变大(慢 query 慢得更多,优化空间更大),二是某些 rewrite 的副作用也被放大(比如改写后 shuffle 数据量变化、内存压力变化)。<strong style="color:#07c160;font-weight:bold;">在小数据上看起来 -62% 的改写,放到 TB 级数据上是 -80% 还是 +10%,目前没有公开数据能回答</strong>。</p>
+<hr style="border:none;height:1px;background:linear-gradient(to right,transparent,#07c160,transparent);margin:25px 0;"/>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">我没有 actionable 的结论想留给你。这篇博客的全部意图,是想把那个 74.92 的数字摆在所有"用 LLM 改 SQL"项目的入口处:</p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">如果你的方案没有给 LLM 看 plan,没有用某种反馈训它或筛它,那不管你用的是 GPT-4o、Claude 4 还是 Gemini 3,你做出来的东西大概率跟"什么都不做"区分不开。</strong></p>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">LLM 能不能改 SQL,是个信号通路问题,不是模型能力问题。</p>
+<section style="margin-top:30px;padding-top:20px;border-top:1px solid #eee;font-size:14px;color:#999;">
+  <p style="font-weight:bold;color:#666;">参考链接</p>
+  <p style="margin:6px 0;word-break:break-all;">[1] https://arxiv.org/abs/2508.09023</p>
+  <p style="margin:6px 0;word-break:break-all;">[2] https://dl.acm.org/doi/10.1145/3318464.3389761</p>
+  <p style="margin:6px 0;word-break:break-all;">[3] https://github.com/sqlancer/sqlancer</p>
+</section>
+
+</body>
+</html>
