@@ -4,7 +4,9 @@ date: 2026-05-25
 tags: ["spark", "query-optimizer", "llm", "join-order", "performance"]
 categories: ["Apache Spark"]
 summary: "Databricks 与 UPenn 把 LLM agent 当成离线 join-order 调优师,在 JOB 113 条查询上拿到 P90 -41% / 几何均值 1.288× 的提速,甚至超过\"完美基数估计\"。从 Apache Spark 一线视角看,这件事说明了什么、又没说明什么。"
-cover: /images/posts/llm-join-order-cover.png
+cover:
+  image: /images/posts/llm-join-order-cover.png
+  relative: false
 showToc: true
 ---
 

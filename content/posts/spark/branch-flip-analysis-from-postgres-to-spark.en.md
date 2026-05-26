@@ -3,7 +3,9 @@ title: "Branch Flip Analysis: A White-Box Way to Find Performance Bugs, and What
 date: 2026-05-26
 tags: ["spark", "query-optimizer", "performance", "testing", "catalyst"]
 categories: ["Apache Spark"]
-cover: /images/posts/branch-flip-analysis-cover.png
+cover:
+  image: /images/posts/branch-flip-analysis-cover.png
+  relative: false
 summary: "An ETH paper finds 21 previously unknown performance bugs in PostgreSQL, MySQL, CockroachDB and MariaDB by flipping optimization branches on and off. The technique is conceptually simple, the surface in Spark is unusually inviting, and the open-source engine community already ships one of the building blocks."
 showToc: true
 ---
