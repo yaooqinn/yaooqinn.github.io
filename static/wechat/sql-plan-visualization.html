@@ -5,6 +5,7 @@
 <title>重新设计 Apache Spark 的 SQL 执行计划可视化</title>
 </head>
 <body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">重新设计 Apache Spark 的 SQL 执行计划可视化</h1>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark Web UI 的 SQL 标签页一直有一个查询计划可视化功能。它将物理计划展示为 DAG——算子作为节点，数据流作为边。理论上，这是 Spark 中最强大的调试工具之一。但实际上，对于复杂查询来说，它几乎不可用。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">现在，一切都变了。</strong> SPARK-55785<sup>[1]</sup> 重新设计了 SQL 执行计划可视化——紧凑布局、交互式指标面板，以及一目了然的边标签。</p>
 <h2 id="_1">问题所在</h2>

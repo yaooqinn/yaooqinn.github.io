@@ -5,6 +5,7 @@
 <title>spark-history-cli：让 Spark History Server 对 AI Agent 友好</title>
 </head>
 <body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
+<h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">spark-history-cli：让 Spark History Server 对 AI Agent 友好</h1>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">Spark History Server 有不错的 Web UI 和完善的 REST API。但如果你已经在终端里——SSH 到网关节点、在 CI 里调试管道、或者编写事后分析脚本——切到浏览器总感觉是一次不必要的上下文切换。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><strong style="color:#07c160;font-weight:bold;">spark-history-cli<sup>[1]</sup></strong> 把整个 Spark History Server 放到你指尖。它是一个 Python CLI 工具，将全部 20 个 REST API 端点封装为交互式 REPL 和一次性命令。列出应用、深入作业和 Stage、检查 SQL 执行、查看 Executor 状态、下载事件日志——全在终端里完成。</p>
 <h2 id="_1">安装</h2>
