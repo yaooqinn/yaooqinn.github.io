@@ -10,6 +10,8 @@ cover:
 showToc: true
 ---
 
+![Anatomy of a 120-line prompt](/images/posts/prompt-anatomy-cover.png)
+
 My previous two posts ([LLM × join order](/posts/query-engines/llm-only-rewrite-doesnt-work/) and [the blind spot of rule-based rewrites](/posts/query-engines/rule-rewrite-blindspot-dsb/)) were both about **letting an LLM rewrite SQL text** — string in, string out, execution engine unchanged. That route is easy to start with, but it can't touch problems that only show up at the physical-plan level: join order, projection column order, physical operator choice.
 
 What if you let the LLM rewrite the physical plan directly?

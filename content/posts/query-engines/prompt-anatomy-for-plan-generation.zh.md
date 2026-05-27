@@ -10,6 +10,8 @@ cover:
 showToc: true
 ---
 
+![解剖一份 120 行 prompt](/images/posts/prompt-anatomy-cover.png)
+
 我前两篇博客 ([LLM × join order](/posts/query-engines/llm-only-rewrite-doesnt-work/) 和 [rule-rewrite 的盲区](/posts/query-engines/rule-rewrite-blindspot-dsb/)) 写的都是**让 LLM 改 SQL 文本**——输入字符串,输出字符串,执行引擎照常处理。这条路线的好处是上手快,坏处是 LLM 改不动那些只有看物理计划才能发现的问题:join 顺序、projection 列序、physical operator 选择。
 
 那如果让 LLM 直接改物理计划呢?
