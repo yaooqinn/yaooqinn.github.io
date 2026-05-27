@@ -6,6 +6,7 @@
 </head>
 <body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
 <h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">解剖一份让 LLM 改物理计划的 120 行 prompt</h1>
+<p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;"><img style="max-width:100%;border-radius:8px;margin:15px 0;display:block;" alt="解剖一份 120 行 prompt" src="https://yaooqinn.github.io/images/posts/prompt-anatomy-cover.png"></p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">我前两篇博客 (LLM × join order 和 rule-rewrite 的盲区) 写的都是<strong style="color:#07c160;font-weight:bold;">让 LLM 改 SQL 文本</strong>——输入字符串,输出字符串,执行引擎照常处理。这条路线的好处是上手快,坏处是 LLM 改不动那些只有看物理计划才能发现的问题:join 顺序、projection 列序、physical operator 选择。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">那如果让 LLM 直接改物理计划呢?</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">最近读了一篇 2026 年 2 月的论文 Making Databases Faster with LLM Evolutionary Sampling<sup>[1]</sup>(arXiv:2602.10387),配套开源 BauplanLabs/Making-Databases-Faster-with-LLM-Evolutionary-Sampling<sup>[2]</sup>,做的就是这个。在 DataFusion 上,他们让 GPT-5 直接对物理 plan 做结构变换,TPC-H SF10 上几何平均加速 <strong style="color:#07c160;font-weight:bold;">4.78×</strong>。</p>
