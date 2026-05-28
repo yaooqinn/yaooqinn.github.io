@@ -33,13 +33,13 @@ A has been discussed. Its core difficulty is that the SQL text layer doesn't car
 
 DBPlanBench is the most complete open-source implementation of route C. The workflow: let DataFusion compile SQL to a physical plan using its own optimizer, flatten that plan into JSON, feed it to GPT-5, **have the LLM emit RFC 6902[^3] JSON patches** (e.g. swap a hash join's build/probe sides), and apply the patches back to DataFusion for real execution.
 
-On TPC-H and TPC-DS (SF=3/10), the paper reports **up to 4.78× speedup on individual queries**[^2]. That number is not the point of this post — in fact I want to surface its **caveats** first:
+On TPC-H and TPC-DS (SF=3/10), the paper reports **up to 4.78× speedup on individual queries**[^2]. That number is not the point of this post — I want to surface its caveats first:
 
 - The baseline is DataFusion's own optimizer; there is no head-to-head against learned optimizers (Bao/Balsa) or against Photon / Spark CBO.
 - The experiments stop at SF=10 (<10 GB), not TB.
 - "Transfer to larger scale" is demonstrated only between SF=3 and SF=10, via a one-shot deterministic rewrite script — not a true TB-scale validation.
 
-So 4.78× should be read as **"the improvement headroom in DataFusion's current physical optimizer on these queries"**, not as "LLM beats cost-based optimizer." That framing matters, because the rest of this post is about architectural choices, not about who wins on accuracy.
+So I'd read 4.78× as **"the improvement headroom in DataFusion's current physical optimizer on these queries"**, not as "LLM beats cost-based optimizer." That framing matters, because the rest of this post is about architectural choices, not about who wins on accuracy.
 
 What actually makes route C interesting relative to route B is three properties **that have nothing to do with accuracy**.
 
@@ -56,7 +56,7 @@ JSON Patch gives you a smaller unit:
 ]
 ```
 
-Each patch is atomic. It can be reverted independently. It can have a single regression test pinned to it. From an engineering-governance standpoint, **this is more controllable than "we wrote a new rule" or "the agent picked this join order"** — particularly compared to route B, where the LLM agent emits "use this join order" with no diff. You either trust the agent's choice or you don't.
+Each patch is atomic. It can be reverted independently. It can have a single regression test pinned to it. From an engineering-governance standpoint, **I'd argue this is more controllable than "we wrote a new rule" or "the agent picked this join order"** — particularly compared to route B, where the LLM agent emits "use this join order" with no diff. You either trust the agent's choice or you don't.
 
 This is not an argument that patches are always correct. It is an argument that **when they're wrong, you can point at exactly which patch was wrong**.
 
@@ -70,7 +70,7 @@ The paper also has a detail that supports this view: an optimization the LLM fou
 
 By contrast, in route B the agent goes through its reasoning loop every time. The amortisation path is not natural.
 
-To be honest: the paper does not include a "after how many reuses does the patch pay for itself" experiment either. That is open work this route still owes the community.
+To be honest: the paper does not include a "after how many reuses does the patch pay for itself" experiment either. Until someone publishes that curve on real workloads, "amortisable" is a hypothesis, not a conclusion.
 
 ## Argument 3 · Patch caches can become real infrastructure
 
@@ -82,37 +82,45 @@ That opens several natural engineering extensions:
 2. **A/B and shadow execution**: a patch can hang off the plan, run as shadow, only become active after measured wins.
 3. **Audit trail**: every applied patch is logged, so "which query was changed by whose patch" is answerable.
 
-This is **a mechanism that fits the SQL-gateway engineering practices already used in projects like Spark and Kyuubi**. The LLM's role here is closer to "patch generator" than "runtime decision maker."
+This is well-aligned with practices SQL gateways already run — signature-keyed plan caches, plan-level audit logs. The LLM's role here is closer to "patch generator" than "runtime decision maker."
 
 ## Where to plug in on Spark — the hook already exists
 
-If you wanted to actually try this on Spark, the API surface is already there. `SparkSessionExtensions` exposes `injectPlannerStrategy`, `injectOptimizerRule`, and `injectPostHocResolutionRule` extension points[^4]; in particular, `injectPlannerStrategy` lets you register a `SparkStrategy` that runs during logical → physical conversion — **exactly after the optimizer has done its work and before execution begins**. A patch applier belongs there.
+If you wanted to actually try this on Spark, the API surface is already there. `SparkSessionExtensions` exposes `injectPlannerStrategy`, `injectOptimizerRule`, and `injectPostHocResolutionRule` extension points[^4]; in particular, `injectPlannerStrategy` lets you register a `SparkStrategy` that runs during logical → physical conversion — **exactly after the optimizer has done its work and before execution begins**. A patch applier can plug in there.
 
-The real engineering bottleneck is not the API. It is **serialisation/deserialisation between `SparkPlan` and JSON**. Catalyst plan tree nodes don't ship with an official JSON codec, and the patch route can't land until that infrastructure exists. This is the unavoidable prerequisite for any "LLM tuning Spark plans" work. DBPlanBench's flat node-id schema on DataFusion (node id + input/left/right references) is a reasonable reference point.
+The real engineering bottleneck is not the API. It is **serialisation/deserialisation between `SparkPlan` and JSON**. Catalyst plan tree nodes don't ship with an official JSON codec.
 
-## A frequent objection, addressed
+From what I can tell, that codec is the prerequisite the patch route needs before anything else lands. DBPlanBench's flat node-id schema on DataFusion (node id + input/left/right references) is a reasonable reference point.
 
-"Wouldn't a training-free version of 'LLM picks a plan' be cheaper?"
+## LLM-PM is a separate route, not a cheaper C
 
-There is such work: **LLM-PM** (arXiv:2506.05853)[^5] uses `text-embedding-3-large` to embed `EXPLAIN` plan text into vectors, then on a new query runs KNN against a history of past plans and applies the most similar historical plan. Fully training-free. On OpenGauss + JOB-CEB the paper reports **mean −21% latency**.
+There is one obvious objection to address head-on: **if you want an LLM helping pick plans, isn't training-free plan retrieval cheaper?**
 
-That sounds attractive — but look at the distribution: **about 20% of queries are slowed down, 60% unchanged**[^5]. The mean −21% is driven by a minority of queries getting a large speedup. That's a separate topic worth its own post; here I just want to note one thing: **LLM-PM is "pick an existing plan from history"; DBPlanBench is "generate a new plan structure." The former cannot create new structure, the latter can — they are not the same class of work**.
+There is such work. **LLM-PM** (arXiv:2506.05853)[^5] uses `text-embedding-3-large` to embed `EXPLAIN` plan text into vectors; for a new query it runs KNN against a history of past plans and applies the most similar historical plan's shape. Fully training-free. On OpenGauss + JOB-CEB the paper reports **mean −21% latency**.
 
-Means hiding distributions is a well-known reporting-discipline problem in this area. Any "mean +N%" result deserves the follow-up question: "what's the speed-up / slow-down / no-change distribution?"
+Look at the distribution: **about 20% of queries are slowed down, 60% unchanged**[^5]. The mean −21% is driven by a minority of queries getting a large speedup — which is a well-known reporting-discipline problem in this area. Any "mean +N%" result deserves the follow-up: "what's the speed-up / slow-down / no-change distribution?"
 
-## Closing
+But distribution isn't the main point. The main point is that **LLM-PM and DBPlanBench are not solving the same problem**:
+
+- **LLM-PM** = retrieve and apply an existing plan. **It cannot create new structure.** Whatever isn't in the history library falls back to baseline.
+- **DBPlanBench** = generate new plan variants. **It can produce structures the original optimizer never explored**, at the cost of paying a GPT-5 call.
+
+So this isn't "cheaper vs. more expensive." It's two different jobs: **retrieval reuses what's known; generation fills what's missing**. A realistic deployment probably stacks them — try KNN first, fall back to LLM patch generation on miss — rather than choosing one.
+
+## Closing — what the next experiment should actually measure
 
 The discussion of "LLM in the query optimizer" has often stalled at "can it replace the cost-based optimizer?" That may be the wrong question.
 
-**Putting it behind the optimizer, doing last-mile tuning via patches, looks better than the alternatives on at least three engineering properties**:
+**Putting it behind the optimizer, doing last-mile tuning via patches**, looks better than the alternatives on three engineering properties: small output granularity is review-friendly; the amortisation model is clean and fits OLAP's repeating-query nature; and the landing hook in engines like Spark already exists (`SparkSessionExtensions.injectPlannerStrategy`).
 
-- Output granularity is small — review-friendly.
-- Amortisation is clean — OLAP's repeating-query nature is a natural fit.
-- Landing path is short — the hooks in Spark/Kyuubi-class projects already exist.
+But to move this from "engineering-plausible" to "benchmark-proven," what's missing isn't more framing — it's a concrete set of numbers. If I had to name what the next round of work should report, it would be these:
 
-This is not a claim that route C will win. It is a claim that **the discussion should now move on to route C's open problems** — scale, cross-engine portability, the engineering cost of running a patch library — rather than staying in the "replace vs. coexist" framing.
+1. **Spark CBO + AQE as baseline, TPC-DS SF≥100, how much head-room is left for patches on top-cost queries.** 4.78× is from DataFusion at SF=10; what's left on a mature CBO at TB scale is the real question.
+2. **Patch cache hit-rate curves**: same template, different literals — how often the patch still applies; when it doesn't, what selectivity drift caused the miss.
+3. **Payback curves**: how many reuses, on average, does a patch need to cover its LLM-generation cost, on real dashboard traffic.
+4. **Regression rate**: corresponding to LLM-PM's 20% slowdown share, what does the patch route show on the same benchmarks, and is there auto-detection + auto-revert.
 
-If anyone in the Apache Spark / Gluten / Kyuubi orbit wants to run this experiment seriously, **the first thing to build is the `SparkPlan ↔ JSON` layer**. Everything else — the LLM, the rule-isation, the cache — connects to that.
+Until those numbers exist, this post is a direction, not a conclusion. If I were running the experiment myself, the first thing I'd build is the `SparkPlan ↔ JSON` codec — the LLM, the rule-isation, the cache all attach to it, but without the codec the route can't take a single step.
 
 ---
 
