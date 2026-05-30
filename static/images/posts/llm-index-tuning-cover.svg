@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1175 500" font-family="'Noto Sans CJK SC','Noto Sans SC','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#1a1f2e"/>
+    </linearGradient>
+    <linearGradient id="bar-dta" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7f1d1d"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="bar-llm" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#e25a1c"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1175" height="500" fill="url(#bg)"/>
+
+  <!-- subtle grid -->
+  <g stroke="#2a3142" stroke-width="1" opacity="0.4">
+    <line x1="0" y1="125" x2="1175" y2="125"/>
+    <line x1="0" y1="250" x2="1175" y2="250"/>
+    <line x1="0" y1="375" x2="1175" y2="375"/>
+  </g>
+
+  <!-- top eyebrow -->
+  <text x="60" y="60" fill="#e25a1c" font-size="16" font-weight="700" letter-spacing="3">MICROSOFT · DTA vs GPT-5 · 真实企业负载索引调优</text>
+
+  <!-- title -->
+  <text x="60" y="115" fill="#f0f3f8" font-size="38" font-weight="800">当索引调优器的成本模型说谎</text>
+  <text x="60" y="160" fill="#9aa5b8" font-size="20" font-weight="400">Real-R query 22:DTA 推荐近 10× 退化,LLM 反而 10s→4s</text>
+
+  <!-- Three big numbers row -->
+  <g>
+    <!-- Number 1: ~10x QPR -->
+    <text x="60" y="280" fill="#dc2626" font-size="84" font-weight="800" font-family="Menlo,Monaco,monospace">~10×</text>
+    <text x="60" y="315" fill="#9aa5b8" font-size="16" font-weight="600">DTA 推荐导致退化</text>
+    <text x="60" y="338" fill="#6b7585" font-size="13">what-if 估错,踩进 QPR</text>
+
+    <!-- divider -->
+    <line x1="380" y1="240" x2="380" y2="345" stroke="#2a3142" stroke-width="1"/>
+
+    <!-- Number 2: 10s to 4s -->
+    <text x="420" y="280" fill="#f97316" font-size="84" font-weight="800" font-family="Menlo,Monaco,monospace">−60%</text>
+    <text x="420" y="315" fill="#9aa5b8" font-size="16" font-weight="600">同一 query,LLM 改进</text>
+    <text x="420" y="338" fill="#6b7585" font-size="13">10s → 4s,绕开盲区</text>
+
+    <!-- divider -->
+    <line x1="710" y1="240" x2="710" y2="345" stroke="#2a3142" stroke-width="1"/>
+
+    <!-- Number 3: fewer indexes -->
+    <text x="750" y="280" fill="#f97316" font-size="84" font-weight="800" font-family="Menlo,Monaco,monospace">7&lt;17</text>
+    <text x="750" y="315" fill="#9aa5b8" font-size="16" font-weight="600">更少索引,Real-D q4</text>
+    <text x="750" y="338" fill="#6b7585" font-size="13">LLM 7 vs DTA 17</text>
+  </g>
+
+  <!-- Bottom: comparison bars -->
+  <g transform="translate(60, 380)">
+    <text x="0" y="0" fill="#9aa5b8" font-size="13" font-weight="600" letter-spacing="2">Real-R q22 执行时间(↓ 越短越好)</text>
+
+    <!-- DTA -->
+    <text x="0" y="28" fill="#dc2626" font-size="12" font-weight="700">DTA 推荐</text>
+    <rect x="120" y="18" width="370" height="14" fill="url(#bar-dta)" rx="2"/>
+    <text x="500" y="29" fill="#dc2626" font-size="12" font-weight="700" font-family="Menlo,Monaco,monospace">~10× 退化</text>
+
+    <!-- baseline -->
+    <text x="0" y="56" fill="#6b7585" font-size="12">无索引基线</text>
+    <rect x="120" y="46" width="160" height="14" fill="#4a5568" rx="2"/>
+    <text x="290" y="57" fill="#9aa5b8" font-size="12" font-family="Menlo,Monaco,monospace">10s</text>
+
+    <!-- LLM -->
+    <text x="0" y="84" fill="#f97316" font-size="12" font-weight="700">GPT-5 推荐</text>
+    <rect x="120" y="74" width="64" height="14" fill="url(#bar-llm)" rx="2"/>
+    <text x="194" y="85" fill="#f97316" font-size="12" font-weight="700" font-family="Menlo,Monaco,monospace">4s</text>
+  </g>
+
+  <!-- Right side: key insight callout -->
+  <g transform="translate(720, 385)">
+    <rect x="0" y="0" width="395" height="90" fill="#1a1f2e" stroke="#e25a1c" stroke-width="2" rx="6"/>
+    <text x="18" y="28" fill="#e25a1c" font-size="13" font-weight="700" letter-spacing="2">真正的问题是什么?</text>
+    <text x="18" y="52" fill="#f0f3f8" font-size="14">LLM 不是 DTA 的替代,是它看不见的</text>
+    <text x="18" y="72" fill="#f0f3f8" font-size="14">候选来源 —— 但怎么廉价信任候选?</text>
+  </g>
+
+  <!-- bottom credit -->
+  <text x="60" y="488" fill="#4a5568" font-size="11">yaooqinn.github.io · LLM × Query Optimization 系列</text>
+</svg>
