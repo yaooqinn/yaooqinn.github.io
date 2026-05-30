@@ -6,6 +6,7 @@
 </head>
 <body style="max-width:677px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;">
 <h1 style="font-size:24px;font-weight:bold;color:#1a1a1a;line-height:1.4;margin:0 0 16px 0;padding:0;">当索引调优器的成本模型说谎时:LLM 在 DTA 看不见的地方</h1>
+<img src="https://yaooqinn.github.io/images/posts/llm-index-tuning-cover.png" style="width:100%;max-width:677px;border-radius:6px;margin:0 0 16px 0;display:block;" />
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">本系列前几篇都在写查询改写:只让 LLM 改 SQL 几乎什么都不会发生、规则改写在 DSB 上的盲区、把 LLM 当 plan-tuner 而不是 optimizer。这一篇换一个优化轴——<strong style="color:#07c160;font-weight:bold;">物理设计</strong>,具体说是<strong style="color:#07c160;font-weight:bold;">索引调优</strong>。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">来源是微软自己团队（Xiaoying Wang、Wentao Wu、Vivek Narasayya、Surajit Chaudhuri）2026 年 3 月放出的一篇评测论文（arXiv:2603.09181），标题很克制：<em style="font-style:italic;color:#576b95;">Evaluating the Practical Effectiveness of LLM-Driven Index Tuning with Microsoft Database Tuning Advisor</em>。Narasayya 和 Chaudhuri 是 SQL Server 索引调优（AutoAdmin / DTA）二十多年的奠基者——他们亲自下场评 LLM，本身就值得读。</p>
 <p style="margin:12px 0;text-align:justify;line-height:1.8;font-size:16px;color:#333;">而且这篇有一个特别诚实的姿态:它不是来宣布 LLM 赢了的，它是来告诉你 LLM 在哪里赢、又为什么现在还不能上生产的。</p>
